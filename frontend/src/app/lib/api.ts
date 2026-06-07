@@ -32,14 +32,18 @@ export type BackendFinding = {
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
   category: string;
   title: string;
-  file: string;
-  line: number;
-  tool: "semgrep" | "osv" | "gitleaks" | string;
-  confidence?: number;
   description?: string;
-  code?: string;
-  suggested_fix?: string;
-  references?: string[];
+  location?: {
+    path: string;
+    start_line?: number;
+    end_line?: number;
+  };
+  metadata: Record<string, unknown>;
+  reachability?: {
+    reachable: boolean;
+    evidence?: string;
+  };
+  features?: Record<string, unknown>;
 };
 
 export async function scanZip(file: File, projectName = "project") {
