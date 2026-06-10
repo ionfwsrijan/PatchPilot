@@ -1,83 +1,11 @@
-# ───────────────────────────────────────────
-# Python
-# ───────────────────────────────────────────
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-*.pyd
-.Python
-.venv/
-venv/
-env/
-ENV/
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-pip-wheel-metadata/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-
-# ───────────────────────────────────────────
-# Node / Frontend
-# ───────────────────────────────────────────
-node_modules/
-dist/
-.next/
-out/
-.vite/
-*.local
-
-# ───────────────────────────────────────────
-# Environment & secrets
-# ───────────────────────────────────────────
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-*.p12
-
-# ───────────────────────────────────────────
-# ML model artifacts
-# ───────────────────────────────────────────
-*.pkl
-*.pt
-*.pth
-*.onnx
-*.safetensors
-*.bin
-backend/app/ml/models/
-
-# ───────────────────────────────────────────
-# PatchPilot runtime artifacts
-# ───────────────────────────────────────────
-backend/jobs/
-backend/*.db
-backend/*.sqlite
-backend/*.sqlite3
-
-# ───────────────────────────────────────────
-# OS & editor
-# ───────────────────────────────────────────
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# ───────────────────────────────────────────
-# Logs
-# ───────────────────────────────────────────
-*.log
-logs/
+"# Python cache" 
+"__pycache__/" 
+"*.pyc" 
+"*.pyo" 
+"" 
+"# Test config" 
+"pytest.ini" 
+"" 
+"# Temporary files" 
+"*.notepad" 
+"*.pychache" 
