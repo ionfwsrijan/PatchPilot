@@ -132,6 +132,45 @@ export async function downloadEvidencePack(
   return { blob, filename };
 }
 
+export async function downloadFindingsCsv(jobId: string) {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings/csv`);
+
+  const contentType = res.headers.get("content-type") || "";
+
+  if (!res.ok) {
+    let errMsg = `Failed to export CSV report (Status ${res.status}).`;
+    if (contentType.includes("application/json")) {
+      try {
+        const errJson = await res.json();
+        errMsg = errJson.detail || errMsg;
+      } catch {}
+    } else {
+      try {
+        const errText = await res.text();
+        if (errText) errMsg = errText;
+      } catch {}
+    }
+    throw new Error(errMsg);
+  }
+
+  if (contentType.includes("application/json")) {
+    const errJson = await res.json().catch(() => null);
+    throw new Error(errJson?.detail || "Received JSON response instead of CSV file.");
+  }
+
+  const blob = await res.blob();
+
+  const cd = res.headers.get("content-disposition") || "";
+  const match = cd.match(/filename="?([^"]+)"?/i);
+  let filename = match?.[1] || `findings-${jobId}.csv`;
+
+  if (!filename.toLowerCase().endsWith(".csv")) {
+    filename += ".csv";
+  }
+
+  return { blob, filename };
+}
+
 export type TrendData = {
   date: string;
   findings: number;

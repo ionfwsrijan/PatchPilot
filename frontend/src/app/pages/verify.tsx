@@ -13,6 +13,7 @@ import { cn } from "../components/ui/utils";
 
 import { downloadEvidencePack } from "../lib/api";
 import { loadLastScan } from "../lib/scan-store";
+import { saveBlob } from "../lib/download";
 
 interface VerificationCheck {
   id: string;
@@ -27,17 +28,6 @@ interface TimelineEvent {
   timestamp: string;
   event: string;
   status: "completed" | "current";
-}
-
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 export function Verify() {

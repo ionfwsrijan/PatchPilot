@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -56,6 +56,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 WORK_ROOT = Path(
@@ -566,6 +567,92 @@ async def get_findings(job_id: str):
 
     findings = [dict(zip(columns, row)) for row in rows]
     return {"job_id": job_id, "finding_count": len(findings), "findings": findings}
+
+
+@app.get("/jobs/{job_id}/findings/csv")
+async def get_findings_csv(job_id: str):
+    import csv
+    import io
+
+    db = await get_db()
+    try:
+        cur = await db.execute("SELECT job_id FROM jobs WHERE job_id = ?", (job_id,))
+        job_row = await cur.fetchone()
+
+        if job_row is None:
+            raise HTTPException(
+                status_code=404, detail=f"No job found with id '{job_id}'"
+            )
+
+        cur = await db.execute(
+            """
+            SELECT id, rule_id, severity, category, file_path,
+                   line_number, cwe, scanner, message, package_name, package_version, created_at
+            FROM findings
+            WHERE job_id = ?
+            ORDER BY created_at
+            """,
+            (job_id,),
+        )
+        columns = [col[0] for col in cur.description]
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    output = io.StringIO(newline="")
+    # Write UTF-8 BOM for Microsoft Excel compatibility
+    output.write("\ufeff")
+    writer = csv.writer(output, lineterminator="\r\n")
+    
+    # Write CSV header row
+    writer.writerow([
+        "finding_id",
+        "scanner",
+        "severity",
+        "file_path",
+        "line_number",
+        "title",
+        "description",
+        "status"
+    ])
+    
+    # Write findings
+    for row in rows:
+        row_dict = dict(zip(columns, row))
+        
+        finding_id = row_dict.get("id") or ""
+        scanner = row_dict.get("scanner") or ""
+        severity = row_dict.get("severity") or ""
+        file_path = row_dict.get("file_path") or ""
+        line_number = row_dict.get("line_number")
+        line_number_str = str(line_number) if line_number is not None else ""
+        
+        # rule_id acts as title/name
+        title = row_dict.get("rule_id") or ""
+        description = row_dict.get("message") or ""
+        
+        # findings are currently hardcoded to "open" on the UI as there's no status storage
+        status = "open"
+        
+        writer.writerow([
+            finding_id,
+            scanner,
+            severity,
+            file_path,
+            line_number_str,
+            title,
+            description,
+            status
+        ])
+        
+    csv_content = output.getvalue()
+    output.close()
+    
+    headers = {
+        "Content-Disposition": f'attachment; filename="findings-{job_id}.csv"',
+        "Content-Type": "text/csv"
+    }
+    return Response(content=csv_content, media_type="text/csv", headers=headers)
 
 
 @app.get("/jobs/{job_id}/verify")

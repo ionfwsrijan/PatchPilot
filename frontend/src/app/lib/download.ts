@@ -6,5 +6,9 @@ export function saveBlob(blob: Blob, filename: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Defer revocation to give the browser time to initiate the download
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 100);
 }
+

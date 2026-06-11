@@ -40,9 +40,31 @@ import type { Finding } from "../data/sample-data";
 import { loadLastScan } from "../lib/scan-store";
 import { mapBackendFindingToUi } from "../lib/mappers";
 import { cn } from "../components/ui/utils";
+import { downloadFindingsCsv } from "../lib/api";
+import { saveBlob } from "../lib/download";
 
 export function Findings() {
   const navigate = useNavigate();
+
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const onExportCsv = async () => {
+    if (!scan?.job_id) {
+      setExportError("No active scan job found to export.");
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const { blob, filename } = await downloadFindingsCsv(scan.job_id);
+      saveBlob(blob, filename);
+    } catch (e: any) {
+      setExportError(e?.message || "Failed to export CSV report.");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const scan = useMemo(() => loadLastScan(), []);
   const findings: Finding[] = useMemo(
@@ -129,12 +151,32 @@ export function Findings() {
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 max-w-7xl pb-20 md:pb-8">
-      <div className="mb-6">
-        <h1 className="mb-2">Findings</h1>
-        <p className="text-muted-foreground">
-          {findings.length} vulnerabilities detected in {scan.project_name}
-        </p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="mb-2">Findings</h1>
+          <p className="text-muted-foreground">
+            {findings.length} vulnerabilities detected in {scan.project_name}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={onExportCsv}
+            disabled={exporting}
+            variant="outline"
+            size="sm"
+            className="w-full sm:w-auto"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {exporting ? "Exporting CSV..." : "Export CSV"}
+          </Button>
+        </div>
       </div>
+
+      {exportError && (
+        <div className="p-3 mb-6 rounded-lg bg-destructive/10 text-destructive text-sm border border-destructive/20 font-medium">
+          {exportError}
+        </div>
+      )}
 
       <Card className="mb-6">
         <CardContent className="p-4">

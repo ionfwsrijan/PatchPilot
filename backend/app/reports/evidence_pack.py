@@ -45,7 +45,7 @@ def build_evidence_pack(
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for p in pack_root.rglob("*"):
             if p.is_file():
-                z.write(p, arcname=str(p.relative_to(pack_root)))
+                z.write(p, arcname=p.relative_to(pack_root).as_posix())
 
     return zip_path
 

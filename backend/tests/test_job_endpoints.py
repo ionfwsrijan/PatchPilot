@@ -171,3 +171,55 @@ class TestGetVerify:
             res = client.get(f"/jobs/{JOB_ID}/verify")
         assert res.status_code == 404
         assert "No verify outcome" in res.json()["detail"]
+
+
+class TestGetFindingsCsv:
+    def test_happy_path(self):
+        with patch(
+            "app.main.get_db", AsyncMock(return_value=db_mock(True, findings=FINDINGS))
+        ):
+            res = client.get(f"/jobs/{JOB_ID}/findings/csv")
+        assert res.status_code == 200
+        assert "text/csv" in res.headers["content-type"]
+        assert f'attachment; filename="findings-{JOB_ID}.csv"' in res.headers["content-disposition"]
+        
+        csv_text = res.text.lstrip('\ufeff')
+        lines = csv_text.splitlines()
+        assert len(lines) == 4  # header + 3 findings
+        
+        # Verify headers
+        headers = lines[0].split(",")
+        expected_headers = ["finding_id", "scanner", "severity", "file_path", "line_number", "title", "description", "status"]
+        assert headers == expected_headers
+        
+        # Verify one of the rows
+        row1 = lines[1].split(",")
+        assert row1[1] == "semgrep"
+        assert row1[2] == "HIGH"
+        assert row1[3] == "app/config.py"
+        assert row1[4] == "42"
+        assert row1[5] == "semgrep.hardcoded-secret"
+        assert row1[6] == "Hardcoded secret detected"
+        assert row1[7] == "open"
+
+    def test_job_with_no_findings(self):
+        with patch(
+            "app.main.get_db", AsyncMock(return_value=db_mock(True, findings=[]))
+        ):
+            res = client.get(f"/jobs/{JOB_ID}/findings/csv")
+        assert res.status_code == 200
+        csv_text = res.text.lstrip('\ufeff')
+        lines = csv_text.splitlines()
+        assert len(lines) == 1  # only header row
+        headers = lines[0].split(",")
+        expected_headers = ["finding_id", "scanner", "severity", "file_path", "line_number", "title", "description", "status"]
+        assert headers == expected_headers
+
+    def test_unknown_job(self):
+        with patch(
+            "app.main.get_db", AsyncMock(return_value=db_mock(False, findings=[]))
+        ):
+            res = client.get("/jobs/does-not-exist/findings/csv")
+        assert res.status_code == 404
+        assert "does-not-exist" in res.json()["detail"]
+
