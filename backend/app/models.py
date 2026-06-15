@@ -75,3 +75,10 @@ class OrgJobStatusResponse(BaseModel):
     org_job_id: str
     status: str
     repos: List[RepoStatus]
+
+
+class DeduplicatedScanResponse(BaseModel):
+    job_id: str
+    raw_finding_count: int
+    finding_count: int
+    findings: List[Finding]

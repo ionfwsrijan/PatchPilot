@@ -41,6 +41,7 @@ from .db import (
     upsert_contributor_stat,
 )
 from .models import (
+    DeduplicatedScanResponse,
     Finding,
     FixRequest,
     FixResponse,
@@ -59,6 +60,7 @@ from .scanners.entropy import run_entropy
 from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
+from .utils.deduplicator import deduplicate
 from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
@@ -320,7 +322,7 @@ def _maybe_use_single_top_folder(repo_dir: Path) -> Path:
     return repo_dir
 
 
-@app.post("/scan", response_model=ScanResponse)
+@app.post("/scan", response_model=DeduplicatedScanResponse)
 async def scan(
     request: Request,
     project: UploadFile = File(...),
@@ -360,6 +362,26 @@ async def scan(
 
     semgrep, osv, gitleaks, entropy, findings = _scan_repo_dir(scan_root)
 
+    raw_finding_count = len(findings)
+
+    disable_dedup = os.environ.get("DISABLE_DEDUP", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    try:
+        epsilon = float(os.environ.get("DEDUP_EPSILON", "0.15"))
+    except ValueError:
+        epsilon = 0.15
+
+    if disable_dedup:
+        dedup_findings = findings
+    else:
+        dedup_findings = deduplicate(findings, epsilon=epsilon)
+
+    finding_count = len(dedup_findings)
+
     try:
         async with await get_db() as db:
             await db.execute(
@@ -367,7 +389,7 @@ async def scan(
                 (job_id, project_name, "zip"),
             )
             rows = []
-            for f in findings:
+            for f in dedup_findings:
                 engine = (f.metadata or {}).get("engine")
                 scanner = {"osv-scanner": "osv"}.get(engine, engine)
                 rule_id = (
@@ -407,17 +429,11 @@ async def scan(
             await db.commit()
     except Exception:
         logger.exception("DB write failed for job %s", job_id)
-    return ScanResponse(
+    return DeduplicatedScanResponse(
         job_id=job_id,
-        project_name=project_name,
-        repo_path=str(scan_root),
-        findings=findings,
-        scanners={
-            "semgrep": {"ok": True, "count": len(semgrep)},
-            "osv": {"ok": True, "count": len(osv)},
-            "gitleaks": {"ok": True, "count": len(gitleaks)},
-            "entropy": {"ok": True, "count": len(entropy)},
-        },
+        raw_finding_count=raw_finding_count,
+        finding_count=finding_count,
+        findings=dedup_findings,
     )
 
 
