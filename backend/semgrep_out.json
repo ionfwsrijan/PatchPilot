@@ -1,0 +1,36 @@
+{
+  "results": [
+    {
+      "check_id": "rules.python.security.injection.sql-injection",
+      "path": "backend/app/main.py",
+      "start": {
+        "line": 125,
+        "col": 14
+      },
+      "end": {
+        "line": 125,
+        "col": 45
+      },
+      "extra": {
+        "message": "Remote user input directly concatenated into SQL string. Potential SQL Injection.",
+        "severity": "ERROR"
+      }
+    },
+    {
+      "check_id": "rules.python.maintainability.unused-import",
+      "path": "backend/app/db.py",
+      "start": {
+        "line": 4,
+        "col": 1
+      },
+      "end": {
+        "line": 4,
+        "col": 13
+      },
+      "extra": {
+        "message": "Imported module 'sys' is never used.",
+        "severity": "INFO"
+      }
+    }
+  ]
+}

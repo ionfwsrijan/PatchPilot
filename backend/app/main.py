@@ -1410,3 +1410,51 @@ async def get_blast_radius(org_job_id: str):
         links.append({"source": repo, "target": pkg})
 
     return {"nodes": list(nodes_dict.values()), "links": links}
+
+# ==========================================
+# SARIF Telemetry Export Endpoint
+# ==========================================
+from app.sarif_translator import SarifTranslator
+
+@app.get("/api/export/sarif")
+async def export_sarif_telemetry():
+    try:
+        # Define path to the target triage file seen in your project root
+        base_dir = Path(__file__).resolve().parent.parent
+        semgrep_file_path = base_dir / "semgrep_out.json"
+
+        if not semgrep_file_path.exists():
+            raise HTTPException(
+                status_code=404, 
+                detail="Source vulnerability triage metrics file (semgrep_out.json) not found."
+            )
+
+        # Read the raw metrics data
+        with open(semgrep_file_path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+
+        # Extract the elements array (Semgrep usually nests findings under "results")
+        if isinstance(raw_data, dict) and "results" in raw_data:
+            triage_elements = raw_data["results"]
+        elif isinstance(raw_data, list):
+            triage_elements = raw_data
+        else:
+            triage_elements = []
+
+        # Run the translator pipeline
+        translator = SarifTranslator(triage_elements)
+        sarif_payload = translator.generate_payload()
+
+        # Return compliance-ready payload with standard download headers
+        return Response(
+            content=json.dumps(sarif_payload, indent=2),
+            media_type="application/sarif+json",
+            headers={
+                "Content-Disposition": "attachment; filename=patchpilot-report.sarif"
+            }
+        )
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid JSON format in source triage metrics.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compile SARIF telemetry: {str(e)}")
