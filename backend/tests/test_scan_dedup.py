@@ -74,10 +74,12 @@ def reset_dedup_cache():
 # Case 1: Dedup enabled with duplicate findings
 @patch("app.main.unzip_to_dir")
 @patch("app.main._scan_repo_dir")
-@patch("sentence_transformers.SentenceTransformer", new=MockSentenceTransformer)
-def test_scan_dedup_enabled(mock_scan, mock_unzip, monkeypatch):
+@patch("app.utils.deduplicator.get_model")
+def test_scan_dedup_enabled(mock_get_model, mock_scan, mock_unzip, monkeypatch):
     monkeypatch.delenv("DISABLE_DEDUP", raising=False)
     monkeypatch.setenv("DEDUP_EPSILON", "0.15")
+    mock_get_model.return_value = MockSentenceTransformer()
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
     mock_scan.return_value = ([], [], [], [], findings_input)
 
     zip_file = make_dummy_zip()
@@ -97,9 +99,10 @@ def test_scan_dedup_enabled(mock_scan, mock_unzip, monkeypatch):
 # Case 2: DISABLE_DEDUP=true
 @patch("app.main.unzip_to_dir")
 @patch("app.main._scan_repo_dir")
-@patch("sentence_transformers.SentenceTransformer", new=MockSentenceTransformer)
-def test_scan_dedup_disabled(mock_scan, mock_unzip, monkeypatch):
+@patch("app.utils.deduplicator.get_model")
+def test_scan_dedup_disabled(mock_get_model, mock_scan, mock_unzip, monkeypatch):
     monkeypatch.setenv("DISABLE_DEDUP", "true")
+    mock_get_model.return_value = MockSentenceTransformer()
     mock_scan.return_value = ([], [], [], [], findings_input)
 
     zip_file = make_dummy_zip()
@@ -122,29 +125,31 @@ def test_scan_dedup_sentence_transformers_unavailable(
     mock_scan, mock_unzip, monkeypatch
 ):
     monkeypatch.delenv("DISABLE_DEDUP", raising=False)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
     mock_scan.return_value = ([], [], [], [], findings_input)
 
-    with patch.dict("sys.modules", {"sentence_transformers": None}):
-        zip_file = make_dummy_zip()
-        res = client.post(
-            "/scan",
-            files={"project": ("project.zip", zip_file, "application/zip")},
-            data={"project_name": "test_project"},
-        )
-        assert res.status_code == 200
-        data = res.json()
-        assert data["raw_finding_count"] == 3
-        assert data["finding_count"] == 3
-        assert len(data["findings"]) == 3
+    zip_file = make_dummy_zip()
+    res = client.post(
+        "/scan",
+        files={"project": ("project.zip", zip_file, "application/zip")},
+        data={"project_name": "test_project"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["raw_finding_count"] == 3
+    assert data["finding_count"] == 3
+    assert len(data["findings"]) == 3
 
 
 # Case 4: Invalid DEDUP_EPSILON value (fallback to 0.15)
 @patch("app.main.unzip_to_dir")
 @patch("app.main._scan_repo_dir")
-@patch("sentence_transformers.SentenceTransformer", new=MockSentenceTransformer)
-def test_scan_dedup_invalid_epsilon(mock_scan, mock_unzip, monkeypatch):
+@patch("app.utils.deduplicator.get_model")
+def test_scan_dedup_invalid_epsilon(mock_get_model, mock_scan, mock_unzip, monkeypatch):
     monkeypatch.delenv("DISABLE_DEDUP", raising=False)
     monkeypatch.setenv("DEDUP_EPSILON", "abc")
+    mock_get_model.return_value = MockSentenceTransformer()
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
     mock_scan.return_value = ([], [], [], [], findings_input)
 
     zip_file = make_dummy_zip()
