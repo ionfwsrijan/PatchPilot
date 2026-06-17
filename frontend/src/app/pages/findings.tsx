@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { downloadAuditReport } from "../lib/api";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -126,43 +126,72 @@ export function Findings() {
   }, [scan, navigate]);
 
   const [selectedFindings, setSelectedFindings] = useState<Set<string>>(
-    new Set(),
-  );
-  const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filters, setFilters] = useState([
-    { id: "critical", label: "Critical", active: false },
-    { id: "high", label: "High", active: false },
-    { id: "medium", label: "Medium", active: false },
-    { id: "low", label: "Low", active: false },
-  ]);
+  new Set(),
+);
+const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
 
-  const toggleFinding = (id: string) => {
-    const next = new Set(selectedFindings);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedFindings(next);
-  };
+// Filter + search state lives in the URL (?q=&severity=) instead of
+// local component state, so it survives navigating away (e.g. to the
+// detail sheet or the Fix page) and back via browser navigation, and
+// can be bookmarked/shared.
+const [searchParams, setSearchParams] = useSearchParams();
 
-  const toggleFilter = (id: string) => {
-    setFilters((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, active: !f.active } : f)),
-    );
-  };
+const searchQuery = searchParams.get("q") ?? "";
 
-  const selectAll = () => {
-    if (selectedFindings.size === findings.length) {
-      setSelectedFindings(new Set());
-    } else {
-      setSelectedFindings(new Set(findings.map((f) => f.id)));
-    }
-  };
+const activeSeverities = useMemo(
+  () =>
+    new Set(
+      (searchParams.get("severity") ?? "").split(",").filter(Boolean),
+    ),
+  [searchParams],
+);
 
-  const activeSeverities = useMemo(
-    () => new Set(filters.filter((f) => f.active).map((f) => f.id)),
-    [filters],
-  );
+const filters = useMemo(
+  () =>
+    [
+      { id: "critical", label: "Critical" },
+      { id: "high", label: "High" },
+      { id: "medium", label: "Medium" },
+      { id: "low", label: "Low" },
+    ].map((f) => ({ ...f, active: activeSeverities.has(f.id) })),
+  [activeSeverities],
+);
 
+const setSearchQuery = (value: string) => {
+  const next = new URLSearchParams(searchParams);
+  if (value) next.set("q", value);
+  else next.delete("q");
+  setSearchParams(next, { replace: true });
+};
+
+const toggleFilter = (id: string) => {
+  const nextSeverities = new Set(activeSeverities);
+  if (nextSeverities.has(id)) nextSeverities.delete(id);
+  else nextSeverities.add(id);
+
+  const next = new URLSearchParams(searchParams);
+  if (nextSeverities.size > 0) {
+    next.set("severity", Array.from(nextSeverities).join(","));
+  } else {
+    next.delete("severity");
+  }
+  setSearchParams(next, { replace: true });
+};
+
+const toggleFinding = (id: string) => {
+  const next = new Set(selectedFindings);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  setSelectedFindings(next);
+};
+
+const selectAll = () => {
+  if (selectedFindings.size === findings.length) {
+    setSelectedFindings(new Set());
+  } else {
+    setSelectedFindings(new Set(findings.map((f) => f.id)));
+  }
+};
   const filteredFindings = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
