@@ -5,7 +5,7 @@ import { Findings } from "./pages/findings";
 import { Fix } from "./pages/fix";
 import { Verify } from "./pages/verify";
 import { Leaderboard } from "./pages/leaderboard";
-import { OrgFindings } from "./pages/org-findings";
+import { AttackPathsPage } from "./pages/attack-paths";
 
 export const router = createBrowserRouter([
   {
