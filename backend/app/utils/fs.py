@@ -16,7 +16,15 @@ def safe_rmtree(p: Path) -> None:
 
 
 def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
+    out_path = out_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as z:
+        for member_name in z.namelist():
+            member_path = (out_path / member_name).resolve()
+            if out_path not in member_path.parents and member_path != out_path:
+                raise ValueError(
+                    f"Zip Slip blocked: malicious file path detected '{member_name}'"
+                )
+
         z.extractall(out_dir)
 
     children = list(out_dir.iterdir())

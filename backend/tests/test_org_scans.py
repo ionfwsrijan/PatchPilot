@@ -259,3 +259,24 @@ def test_extract_dependencies(tmp_path):
     assert ("vite", "4.0.0") in deps
     assert ("fastapi", "0.95.0") in deps
     assert ("pydantic", "1.10") in deps
+
+
+@pytest.mark.anyio
+@patch("app.main.httpx.AsyncClient.get")
+async def test_fetch_org_repos_timeout(mock_get):
+    """
+    Test that an httpx.TimeoutException gracefully degrades into a
+    504 Gateway Timeout instead of hanging the worker thread indefinitely.
+    """
+    import httpx
+    from fastapi import HTTPException
+
+    from app.main import fetch_org_repos
+
+    mock_get.side_effect = httpx.TimeoutException("Connection timed out")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await fetch_org_repos("test-org")
+
+    assert exc_info.value.status_code == 504
+    assert "GitHub API request failed or timed out" in exc_info.value.detail

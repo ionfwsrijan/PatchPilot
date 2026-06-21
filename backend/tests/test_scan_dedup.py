@@ -89,11 +89,18 @@ def test_scan_dedup_enabled(mock_get_model, mock_scan, mock_unzip, monkeypatch):
         data={"project_name": "test_project"},
     )
     assert res.status_code == 200
-    data = res.json()
-    assert data["raw_finding_count"] == 3
+    job_id = res.json()["job_id"]
+
+    from app.main import ACTIVE_SCANS
+    assert ACTIVE_SCANS[job_id]["raw_finding_count"] == 3
+    assert ACTIVE_SCANS[job_id]["findings_count"] == 2
+
+    res_findings = client.get(f"/jobs/{job_id}/findings")
+    assert res_findings.status_code == 200
+    data = res_findings.json()
     assert data["finding_count"] == 2
     assert len(data["findings"]) == 2
-    assert {f["id"] for f in data["findings"]} == {"1", "3"}
+    assert {f["rule_id"] for f in data["findings"]} == {"SQL Injection", "Hardcoded Password"}
 
 
 # Case 2: DISABLE_DEDUP=true
@@ -112,8 +119,15 @@ def test_scan_dedup_disabled(mock_get_model, mock_scan, mock_unzip, monkeypatch)
         data={"project_name": "test_project"},
     )
     assert res.status_code == 200
-    data = res.json()
-    assert data["raw_finding_count"] == 3
+    job_id = res.json()["job_id"]
+
+    from app.main import ACTIVE_SCANS
+    assert ACTIVE_SCANS[job_id]["raw_finding_count"] == 3
+    assert ACTIVE_SCANS[job_id]["findings_count"] == 3
+
+    res_findings = client.get(f"/jobs/{job_id}/findings")
+    assert res_findings.status_code == 200
+    data = res_findings.json()
     assert data["finding_count"] == 3
     assert len(data["findings"]) == 3
 
@@ -135,8 +149,15 @@ def test_scan_dedup_sentence_transformers_unavailable(
         data={"project_name": "test_project"},
     )
     assert res.status_code == 200
-    data = res.json()
-    assert data["raw_finding_count"] == 3
+    job_id = res.json()["job_id"]
+
+    from app.main import ACTIVE_SCANS
+    assert ACTIVE_SCANS[job_id]["raw_finding_count"] == 3
+    assert ACTIVE_SCANS[job_id]["findings_count"] == 3
+
+    res_findings = client.get(f"/jobs/{job_id}/findings")
+    assert res_findings.status_code == 200
+    data = res_findings.json()
     assert data["finding_count"] == 3
     assert len(data["findings"]) == 3
 
@@ -159,7 +180,14 @@ def test_scan_dedup_invalid_epsilon(mock_get_model, mock_scan, mock_unzip, monke
         data={"project_name": "test_project"},
     )
     assert res.status_code == 200
-    data = res.json()
-    assert data["raw_finding_count"] == 3
+    job_id = res.json()["job_id"]
+
+    from app.main import ACTIVE_SCANS
+    assert ACTIVE_SCANS[job_id]["raw_finding_count"] == 3
+    assert ACTIVE_SCANS[job_id]["findings_count"] == 2
+
+    res_findings = client.get(f"/jobs/{job_id}/findings")
+    assert res_findings.status_code == 200
+    data = res_findings.json()
     assert data["finding_count"] == 2
     assert len(data["findings"]) == 2

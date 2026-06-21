@@ -56,6 +56,12 @@ features?: Record<string, unknown>;
   references?: string[];
 };
 
+export type ScanInitResponse = {
+  job_id: string;
+  project_name: string;
+  status: string;
+};
+
 export async function scanZip(file: File, projectName = "project") {
   const form = new FormData();
   form.append("project", file);
@@ -66,11 +72,8 @@ export async function scanZip(file: File, projectName = "project") {
     body: form,
   });
 
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-
-  return (await res.json()) as ScanResponse;
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScanInitResponse;
 }
 
 export async function scanRepoUrl(
@@ -93,7 +96,12 @@ export async function scanRepoUrl(
     throw new Error(err?.detail ?? "Import from URL failed");
   }
 
-  return (await res.json()) as ScanResponse;
+  return (await res.json()) as ScanInitResponse;
+}
+export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as BackendFinding[];
 }
 
 export async function fix(jobId: string, findingIds: string[]) {

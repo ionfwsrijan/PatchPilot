@@ -87,7 +87,7 @@ export function Verify() {
     {
       id: "2",
       timestamp: "14:25:39",
-      event: `All tools completed - ${scan?.findings?.length ?? 0} findings detected`,
+      event: `All tools completed - ${(scan as any)?.finding_count ?? 0} findings detected`,
       status: "completed",
     },
     {

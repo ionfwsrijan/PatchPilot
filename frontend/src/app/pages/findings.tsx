@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { downloadAuditReport } from "../lib/api";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Card, CardContent } from "../components/ui/card";
@@ -41,6 +41,7 @@ import { CodeBlock } from "../components/code-block";
 import { FilterChips } from "../components/filter-chips";
 import type { Finding } from "../data/sample-data";
 import { loadLastScan } from "../lib/scan-store";
+import { getJobFindings } from "../lib/api";
 import { mapBackendFindingToUi } from "../lib/mappers";
 import { cn } from "../components/ui/utils";
 
@@ -114,28 +115,50 @@ function ExportReportButton({ scanId }: { scanId: string }) {
 export function Findings() {
   const navigate = useNavigate();
 
-  const scan = useMemo(() => loadLastScan(), []);
-  const findings: Finding[] = useMemo(
-    () => (scan ? scan.findings.map(mapBackendFindingToUi) : []),
-    [scan],
-  );
+  const [scan, setScan] = useState<any>(null);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [isLoadingFindings, setIsLoadingFindings] = useState(true);
 
   useEffect(() => {
-    if (!scan) {
+    const storedScan = loadLastScan();
+    if (!storedScan?.job_id) {
+      setIsLoadingFindings(false);
+      return;
     }
-  }, [scan, navigate]);
+    setScan(storedScan);
+    getJobFindings(storedScan.job_id)
+      .then((response: any) => {
+        const actualFindings = Array.isArray(response) 
+          ? response 
+          : (response.findings || response.data || []);
+          
+        setFindings(actualFindings.map(mapBackendFindingToUi));
+      })
+      .catch((err) => console.error("Failed to fetch findings", err))
+      .finally(() => setIsLoadingFindings(false));
+  }, []);
 
-  const [selectedFindings, setSelectedFindings] = useState<Set<string>>(
-    new Set(),
-  );
+  const [selectedFindings, setSelectedFindings] = useState<Set<string>>(new Set());
   const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filters, setFilters] = useState([
+
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [searchQuery, setSearchQuery] = useState(() =>
+    (searchParams.get("q") ?? "").toString(),
+  );
+
+  const baseFilters = [
     { id: "critical", label: "Critical", active: false },
     { id: "high", label: "High", active: false },
     { id: "medium", label: "Medium", active: false },
     { id: "low", label: "Low", active: false },
-  ]);
+  ];
+
+  const [filters, setFilters] = useState(() => {
+    const param = searchParams.get("severity");
+    const active = new Set(param ? param.split(",") : []);
+    return baseFilters.map((f) => ({ ...f, active: active.has(f.id) }));
+  });
 
   const toggleFinding = (id: string) => {
     const next = new Set(selectedFindings);
@@ -145,9 +168,24 @@ export function Findings() {
   };
 
   const toggleFilter = (id: string) => {
-    setFilters((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, active: !f.active } : f)),
-    );
+    setFilters((prev) => {
+      const next = prev.map((f) => (f.id === id ? { ...f, active: !f.active } : f));
+      const activeIds = next.filter((f) => f.active).map((f) => f.id);
+      const params = new URLSearchParams();
+      if (activeIds.length) params.set("severity", activeIds.join(","));
+      if (searchQuery.trim()) params.set("q", searchQuery.trim());
+      setSearchParams(params, { replace: true });
+      return next;
+    });
+  };
+
+  const updateQueryParam = (q: string) => {
+    setSearchQuery(q);
+    const activeIds = filters.filter((f) => f.active).map((f) => f.id);
+    const params = new URLSearchParams();
+    if (activeIds.length) params.set("severity", activeIds.join(","));
+    if (q.trim()) params.set("q", q.trim());
+    setSearchParams(params, { replace: true });
   };
 
   const selectAll = () => {
@@ -179,6 +217,17 @@ export function Findings() {
       return matchesQuery && matchesSeverity;
     });
   }, [findings, searchQuery, activeSeverities]);
+
+  if (isLoadingFindings) {
+    return (
+      <div className="container mx-auto px-4 py-8 max-w-7xl flex justify-center items-center h-64">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p>Loading scan results...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!scan) {
     return (
@@ -217,7 +266,7 @@ export function Findings() {
               <Input
                 placeholder="Search findings..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => updateQueryParam(e.target.value)}
                 className="pl-9"
               />
             </div>

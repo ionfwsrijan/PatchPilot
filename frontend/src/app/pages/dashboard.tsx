@@ -25,6 +25,7 @@ import {
 import { StatusPill } from "../components/status-pill";
 import { Input } from "../components/ui/input";
 import { cn } from "../components/ui/utils";
+import { ProgressStepper } from "../components/progress-stepper";
 
 type UiJobStatus = "completed" | "running" | "failed" | "pending";
 
@@ -195,21 +196,63 @@ export function Dashboard() {
     navigate("/findings");
   };
 
+  const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);
+  const [singleScanState, setSingleScanState] = useState<any>(null);
+
+  const watchSingleScan = (jobId: string, projectName: string) => {
+    setActiveSingleScanId(jobId);
+    setSingleScanState({ sast: 'pending', dependency: 'pending', secrets: 'pending', status: 'running' });
+
+    if (eventSource) eventSource.close();
+    const sse = new EventSource(`${API_BASE}/api/scans/${jobId}/stream`);
+
+    sse.onmessage = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.error) {
+        sse.close();
+        setScanLoading(false);
+        setScanError("Live scan tracking failed.");
+        setActiveSingleScanId(null);
+        return;
+      }
+      setSingleScanState(parsed);
+
+if (parsed.status === "completed" || parsed.status === "failed") {
+        sse.close();
+        setTimeout(async () => {
+          try {
+            const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+            const data = await res.json();
+            setScanLoading(false);
+            handleScanSuccess({ job_id: jobId, project_name: projectName, findings: data.findings || [] });
+            setActiveSingleScanId(null);
+          } catch (err) {
+            setScanLoading(false);
+            handleScanSuccess({ job_id: jobId, project_name: projectName, findings: [] });
+            setActiveSingleScanId(null);
+          }
+        }, 1000);
+      }
+    };
+    sse.onerror = () => {
+      if (sse.readyState === EventSource.CLOSED) setScanLoading(false);
+    };
+    setEventSource(sse);
+  };
+
   const handleZipFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setScanError("Please upload a .zip file.");
       return;
     }
-
     setScanError(null);
     setScanLoading(true);
 
     try {
-      const scan = await scanZip(file, file.name.replace(/\.zip$/i, ""));
-      handleScanSuccess(scan);
+      const initRes = await scanZip(file, file.name.replace(/\.zip$/i, ""));
+      watchSingleScan(initRes.job_id, initRes.project_name);
     } catch (e: any) {
       setScanError(e?.message ?? "Scan failed");
-    } finally {
       setScanLoading(false);
     }
   };
@@ -217,25 +260,20 @@ export function Dashboard() {
   const handleImportFromUrl = async () => {
     const url = repoUrl.trim();
     if (!url) {
-      setScanError(
-        "Please paste a GitHub repo URL (example: https://github.com/owner/repo).",
-      );
+      setScanError("Please paste a GitHub repo URL.");
       return;
     }
-
     setScanError(null);
     setScanLoading(true);
 
     try {
-      const scan = await scanRepoUrl(url, repoRef || "main", "project");
-      handleScanSuccess(scan);
-
+      const initRes = await scanRepoUrl(url, repoRef || "main", "project");
       setUrlDialogOpen(false);
       setRepoUrl("");
       setRepoRef("main");
+      watchSingleScan(initRes.job_id, initRes.project_name);
     } catch (e: any) {
       setScanError(e?.message ?? "Import from URL failed");
-    } finally {
       setScanLoading(false);
     }
   };
@@ -537,6 +575,80 @@ const handleAbortScan = async (mode: "pending" | "force") => {
               </div>
             </div>
           )}
+
+        {activeSingleScanId && singleScanState && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="w-full max-w-3xl rounded-xl bg-background border border-border/50 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+              <div className="p-6 border-b border-border/30 bg-muted/10 flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-xl tracking-tight text-foreground">Security Scan Timeline</h2>
+                  <p className="text-xs text-muted-foreground font-mono mt-1.5 px-2 py-0.5 bg-muted/50 rounded inline-flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"></span>
+                    {activeSingleScanId}
+                  </p>
+                </div>
+                <Loader2 className={cn("h-6 w-6 text-primary", singleScanState.status === "running" && "animate-spin")} />
+              </div>
+
+              <div className="p-10 bg-gradient-to-b from-background to-muted/5">
+                <div className="relative pl-8 border-l-2 border-border/30 space-y-12">
+                  
+                  <div className="relative animate-in fade-in slide-in-from-left-4 duration-500">
+                    <div className={cn("absolute -left-[41px] top-1 h-5 w-5 rounded-full border-4 bg-background", singleScanState.sast === "completed" ? "border-emerald-500" : singleScanState.sast === "in_progress" ? "border-primary shadow-[0_0_15px_rgba(59,130,246,0.5)]" : "border-border")} />
+                    <div className="flex flex-col bg-muted/5 p-4 rounded-lg border border-border/40 hover:border-primary/30 transition-colors">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className={cn("text-base font-semibold", singleScanState.sast === "upcoming" && "text-muted-foreground")}>Static Application Security Testing (SAST)</span>
+                        <span className="text-xs font-mono px-2 py-1 bg-muted/50 rounded text-muted-foreground">Semgrep</span>
+                      </div>
+                      {singleScanState.sast === "in_progress" && <span className="text-sm text-primary mt-1 animate-pulse">Analyzing source code patterns...</span>}
+                      {singleScanState.sast === "completed" && <span className="text-sm text-emerald-500 mt-1 flex items-center gap-1.5">✓ Source analysis complete</span>}
+                      {singleScanState.sast === "upcoming" && <span className="text-sm text-muted-foreground mt-1">Pending initialization</span>}
+                    </div>
+                  </div>
+
+                  <div className={cn("relative transition-all duration-700", singleScanState.sast !== "completed" && "opacity-40 grayscale")}>
+                    <div className={cn("absolute -left-[41px] top-1 h-5 w-5 rounded-full border-4 bg-background", singleScanState.dependency === "completed" ? "border-emerald-500" : singleScanState.dependency === "in_progress" ? "border-primary shadow-[0_0_15px_rgba(59,130,246,0.5)]" : "border-border")} />
+                    <div className="flex flex-col bg-muted/5 p-4 rounded-lg border border-border/40 hover:border-primary/30 transition-colors">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className={cn("text-base font-semibold", singleScanState.dependency === "upcoming" && "text-muted-foreground")}>Dependency Vulnerability Scan</span>
+                        <span className="text-xs font-mono px-2 py-1 bg-muted/50 rounded text-muted-foreground">OSV-Scanner</span>
+                      </div>
+                      {singleScanState.dependency === "in_progress" && <span className="text-sm text-primary mt-1 animate-pulse">Cross-referencing global CVE databases...</span>}
+                      {singleScanState.dependency === "completed" && <span className="text-sm text-emerald-500 mt-1 flex items-center gap-1.5">✓ Dependency check verified</span>}
+                      {singleScanState.dependency === "upcoming" && <span className="text-sm text-muted-foreground mt-1">Waiting for SAST completion</span>}
+                    </div>
+                  </div>
+
+                  <div className={cn("relative transition-all duration-700", singleScanState.dependency !== "completed" && "opacity-40 grayscale")}>
+                    <div className={cn("absolute -left-[41px] top-1 h-5 w-5 rounded-full border-4 bg-background", singleScanState.secrets === "completed" ? "border-emerald-500" : singleScanState.secrets === "in_progress" ? "border-primary shadow-[0_0_15px_rgba(59,130,246,0.5)]" : "border-border")} />
+                    <div className="flex flex-col bg-muted/5 p-4 rounded-lg border border-border/40 hover:border-primary/30 transition-colors">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className={cn("text-base font-semibold", singleScanState.secrets === "upcoming" && "text-muted-foreground")}>Secrets & Entropy Detection</span>
+                        <div className="flex gap-2">
+                          <span className="text-xs font-mono px-2 py-1 bg-muted/50 rounded text-muted-foreground">Gitleaks</span>
+                          <span className="text-xs font-mono px-2 py-1 bg-muted/50 rounded text-muted-foreground">Entropy</span>
+                        </div>
+                      </div>
+                      {singleScanState.secrets === "in_progress" && <span className="text-sm text-primary mt-1 animate-pulse">Scanning for exposed keys and high-entropy strings...</span>}
+                      {singleScanState.secrets === "completed" && <span className="text-sm text-emerald-500 mt-1 flex items-center gap-1.5">✓ Secrets scan complete</span>}
+                      {singleScanState.secrets === "upcoming" && <span className="text-sm text-muted-foreground mt-1">Waiting for dependency scan</span>}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-border/30 bg-muted/10 flex justify-between items-center">
+                 <p className="text-sm text-muted-foreground">
+                  {singleScanState.status === "completed" ? "Finalizing report..." : "Background processes running. Do not close this window."}
+                 </p>
+                 <span className={cn("text-xs font-mono uppercase tracking-widest px-3 py-1.5 rounded-full border", singleScanState.status === "running" ? "bg-primary/10 text-primary border-primary/20" : "bg-emerald-500/10 text-emerald-500 border-emerald-500/20")}>
+                    {singleScanState.status}
+                 </span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {activeOrgJobId && orgStatusData && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
