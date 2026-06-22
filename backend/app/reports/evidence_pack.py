@@ -38,7 +38,71 @@ async def build_evidence_pack(
         gitleaks.get("stdout", ""), encoding="utf-8"
     )
 
-    # ==== Attack Path Files ====\n    # Generate attack path data for the job and include in the evidence pack\n    from ..attack_paths.engine import generate_attack_paths\n    import json\n    attack_paths = await generate_attack_paths(job_id)\n    # Serialize full paths list\n    attack_paths_json = [\n        {\n            "id": p.id,\n            "risk_score": p.risk_score,\n            "steps": [step.label for step in p.steps]\n        }\n        for p in attack_paths\n    ]\n    (pack_root / "attack-paths.json").write_text(json.dumps(attack_paths_json, indent=2), encoding="utf-8")\n    # Graph adjacency list for debugging\n    import networkx as nx\n    from ..attack_paths.graph_builder import build_graph\n    # Re‑build graph to capture adjacency (using same normalized findings)\n    from ..db import get_db\n    async def _load_findings(job_id: str):\n        db = await get_db()\n        try:\n            cur = await db.execute("""\n                SELECT id, rule_id, severity, category, file_path, line_number, message, metadata\n                FROM findings\n                WHERE job_id = ?\n            """, (job_id,))\n            rows = await cur.fetchall()\n        finally:\n            await db.close()\n        return rows\n    findings_rows = await _load_findings(job_id)\n    from ..models import Finding, Location\n    raw_findings = []\n    for row in findings_rows:\n        fid, rule_id, severity, category, file_path, line_number, message, metadata_json = row\n        metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else {}\n        location = None\n        if file_path:\n            location = Location(path=file_path, start_line=line_number)\n        raw_findings.append(Finding(id=fid, category=category, severity=severity, title=rule_id or "", description=message or "", location=location, metadata=metadata))\n    # Normalize and build graph\n    from ..attack_paths.models import NormalizedFinding\n    normalized = [NormalizedFinding(id=f.id, category=f.category.lower(), severity=f.severity, title=f.title, description=f.description, metadata=f.metadata) for f in raw_findings]\n    graph = build_graph(normalized)\n    # Convert adjacency to dict\n    adjacency = {node: list(graph.successors(node)) for node in graph.nodes}\n    (pack_root / "attack-graph-report.json").write_text(json.dumps(adjacency, indent=2), encoding="utf-8")\n    # Summary of highest risk path\n    if attack_paths:\n        top_path = max(attack_paths, key=lambda p: p.risk_score)\n        summary_lines = [\n            f"Top Attack Path ID: {top_path.id}",\n            f"Risk Score: {top_path.risk_score}",\n            "Steps:",\n        ] + [f" - {step.label}" for step in top_path.steps]\n        (pack_root / "attack-path-summary.txt").write_text("\n".join(summary_lines), encoding="utf-8")\n    else:\n        (pack_root / "attack-path-summary.txt").write_text("No attack paths generated.", encoding="utf-8")
+    # ==== Attack Path Files ====
+    # Generate attack path data for the job and include in the evidence pack
+    from ..attack_paths.engine import generate_attack_paths
+    import json
+    attack_paths = await generate_attack_paths(job_id)
+    # Serialize full paths list
+    attack_paths_json = [
+        {
+            "id": p.id,
+            "risk_score": p.risk_score,
+            "steps": [step.label for step in p.steps]
+        }
+        for p in attack_paths
+    ]
+    (pack_root / "attack-paths.json").write_text(json.dumps(attack_paths_json, indent=2), encoding="utf-8")
+    # Graph adjacency list for debugging
+    import networkx as nx
+    from ..attack_paths.graph_builder import build_graph
+    # Re‑build graph to capture adjacency (using same normalized findings)
+    from ..db import get_db
+    async def _load_findings(job_id: str):
+        db = await get_db()
+        try:
+            cur = await db.execute("""
+                SELECT id, rule_id, severity, category, file_path, line_number, message, metadata
+                FROM findings
+                WHERE job_id = ?
+            """, (job_id,))
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        return rows
+    findings_rows = await _load_findings(job_id)
+    from ..models import Finding, Location
+    raw_findings = []
+    for row in findings_rows:
+        fid, rule_id, severity, category, file_path, line_number, message, metadata_json = row
+        metadata = json.loads(metadata_json) if isinstance(metadata_json, str) else {}
+        location = None
+        if file_path:
+            location = Location(path=file_path, start_line=line_number)
+        raw_findings.append(Finding(id=fid, category=category, severity=severity, title=rule_id or "", description=message or "", location=location, metadata=metadata))
+    # Normalize and build graph
+    from ..attack_paths.models import NormalizedFinding
+    normalized = [NormalizedFinding(id=f.id, category=f.category.lower(), severity=f.severity, title=f.title, description=f.description, metadata=f.metadata) for f in raw_findings]
+    graph = build_graph(normalized)
+    # Convert adjacency to dict
+    adjacency = {node: list(graph.successors(node)) for node in graph.nodes}
+    (pack_root / "attack-graph-report.json").write_text(json.dumps(adjacency, indent=2), encoding="utf-8")
+    # Summary of highest risk path
+    if attack_paths:
+        top_path = max(attack_paths, key=lambda p: p.risk_score)
+        summary_lines = [
+            f"Top Attack Path ID: {top_path.id}",
+            f"Risk Score: {top_path.risk_score}",
+            "Steps:",
+        ] + [f" - {step.label}" for step in top_path.steps]
+        (pack_root / "attack-path-summary.txt").write_text("\n".join(summary_lines), encoding="utf-8")
+    else:
+        (pack_root / "attack-path-summary.txt").write_text("No attack paths generated.", encoding="utf-8")
+
+    # Root Cause Analysis
+    from ..ml.root_cause.engine import analyze_root_cause
+    rca_results = await analyze_root_cause(job_id)
+    (pack_root / "rca.json").write_text(json.dumps(rca_results, indent=2), encoding="utf-8")
 
     report_md = _render_report(project_name=project_name, job_id=job_id)
     (pack_root / "REPORT.md").write_text(report_md, encoding="utf-8")
