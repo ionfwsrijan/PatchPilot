@@ -137,6 +137,28 @@ export function MlScorePill({ score }: { score: number }) {
   );
 }
 
+export function RiskScorePill({ score }: { score: number }) {
+  let colorClasses = "";
+  if (score >= 100) {
+    colorClasses = "bg-rose-500/10 border-rose-500/20 text-rose-600 dark:bg-rose-500/20 dark:border-rose-500/30 dark:text-rose-400";
+  } else if (score >= 50) {
+    colorClasses = "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:bg-amber-500/20 dark:border-amber-500/30 dark:text-amber-400";
+  } else {
+    colorClasses = "bg-slate-500/10 border-slate-500/20 text-slate-600 dark:bg-slate-500/20 dark:border-slate-500/30 dark:text-slate-400";
+  }
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-bold font-mono tracking-wide shadow-sm select-none",
+        colorClasses
+      )}
+    >
+      Risk: {score}
+    </span>
+  );
+}
+
 export function Findings() {
   const navigate = useNavigate();
 
@@ -166,7 +188,7 @@ export function Findings() {
   const [selectedFindings, setSelectedFindings] = useState<Set<string>>(new Set());
   const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
-  const [sortBy, setSortBy] = useState<"severity" | "ml_score">("severity");
+  const [sortBy, setSortBy] = useState<"severity" | "ml_score" | "risk_score">("risk_score");
 
   const handleStatusUpdate = async (findingId: string, newStatus: "open" | "accepted" | "ignored") => {
     setIsUpdatingStatus(true);
@@ -282,7 +304,18 @@ export function Findings() {
       info: 0,
     };
 
-    if (sortBy === "ml_score") {
+    if (sortBy === "risk_score") {
+      filtered.sort((a, b) => {
+        const scoreA = a.risk_score ?? 0;
+        const scoreB = b.risk_score ?? 0;
+        if (scoreB !== scoreA) {
+          return scoreB - scoreA;
+        }
+        const sevA = severityOrder[a.severity] ?? 0;
+        const sevB = severityOrder[b.severity] ?? 0;
+        return sevB - sevA;
+      });
+    } else if (sortBy === "ml_score") {
       filtered.sort((a, b) => {
         const scoreA = a.ml_score ?? 0;
         const scoreB = b.ml_score ?? 0;
@@ -379,6 +412,18 @@ export function Findings() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSortBy("risk_score")}
+                  className={cn(
+                    "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
+                    sortBy === "risk_score"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "hover:bg-muted/50 hover:text-foreground"
+                  )}
+                >
+                  Risk Score
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSortBy("ml_score")}
                   className={cn(
                     "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-semibold ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
@@ -468,6 +513,9 @@ export function Findings() {
                     {finding.ml_score !== undefined && finding.ml_score !== null && (
                       <MlScorePill score={finding.ml_score} />
                     )}
+                    {finding.risk_score !== undefined && finding.risk_score !== null && (
+                      <RiskScorePill score={finding.risk_score} />
+                    )}
                   </div>
                 </TableCell>
                 <TableCell>
@@ -537,6 +585,9 @@ export function Findings() {
                     {finding.ml_score !== undefined && finding.ml_score !== null && (
                       <MlScorePill score={finding.ml_score} />
                     )}
+                    {finding.risk_score !== undefined && finding.risk_score !== null && (
+                      <RiskScorePill score={finding.risk_score} />
+                    )}
                     <ToolBadge tool={finding.tool} />
                   </div>
                   <div className="font-medium mb-1 line-clamp-2">
@@ -568,6 +619,9 @@ export function Findings() {
                   <SeverityChip severity={detailFinding.severity} />
                   {detailFinding.ml_score !== undefined && detailFinding.ml_score !== null && (
                     <MlScorePill score={detailFinding.ml_score} />
+                  )}
+                  {detailFinding.risk_score !== undefined && detailFinding.risk_score !== null && (
+                    <RiskScorePill score={detailFinding.risk_score} />
                   )}
                   <ToolBadge tool={detailFinding.tool} />
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-muted/30 text-muted-foreground text-[11px] font-bold uppercase tracking-wider">

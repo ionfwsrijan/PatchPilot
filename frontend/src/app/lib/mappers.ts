@@ -42,5 +42,6 @@ export function mapBackendFindingToUi(f: BackendFinding): Finding {
     suggestedFix: f.suggested_fix,
     references: f.references ?? [],
     ml_score: f.ml_score,
+    risk_score: f.risk_score,
   };
 }

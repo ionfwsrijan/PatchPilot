@@ -132,15 +132,18 @@ def health():
     }
 
 
-def _prioritize_findings(findings: List[Finding]) -> List[Finding]:
-    def score(f: Finding) -> int:
+def _calculate_risk_scores(findings: List[Finding]) -> None:
+    for f in findings:
         sev = {"CRITICAL": 100, "HIGH": 80, "MEDIUM": 50, "LOW": 20, "INFO": 5}.get(
             f.severity, 10
         )
         tw = {"dependency": 25, "secret": 35, "sast": 20}.get(f.category, 10)
-        return sev + tw
-
-    return sorted(findings, key=score, reverse=True)
+        base_score = sev + tw
+        ml_bonus = (f.ml_score * 50.0) if getattr(f, "ml_score", None) is not None else 0.0
+        total = float(base_score) + ml_bonus
+        if getattr(f, "reachability", None) and getattr(f.reachability, "reachable", False):
+            total *= 1.5
+        f.risk_score = round(total, 2)
 
 
 def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
@@ -216,13 +219,18 @@ def _scan_repo_dir(repo_dir: Path, progress_cb=None):
 
     findings = scoring_function(findings, RANKER)
 
+    _calculate_risk_scores(findings)
+
     if RANKER:
         findings.sort(
             key=lambda f: getattr(f, "ml_score", 0.0),
             reverse=True,
         )
     else:
-        findings = _prioritize_findings(findings)
+        findings.sort(
+            key=lambda f: getattr(f, "risk_score", 0.0),
+            reverse=True,
+        )
 
     return semgrep, osv, gitleaks, entropy, findings
 
@@ -447,11 +455,12 @@ async def _run_single_scan_task(
                         pkg_name,
                         pkg_version,
                         f.ml_score,
+                        f.risk_score,
                     )
                 )
             if rows:
                 await db.executemany(
-                    "INSERT INTO findings (id, job_id, rule_id, severity, category, file_path, line_number, cwe, scanner, message, package_name, package_version, ml_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO findings (id, job_id, rule_id, severity, category, file_path, line_number, cwe, scanner, message, package_name, package_version, ml_score, risk_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rows,
                 )
             await db.execute(
@@ -803,7 +812,7 @@ async def get_findings(job_id: str):
         cur = await db.execute(
             """
             SELECT id, rule_id, severity, category, file_path,
-                   line_number, cwe, scanner, message, package_name, package_version, created_at, ml_score
+                   line_number, cwe, scanner, message, package_name, package_version, created_at, ml_score, risk_score
             FROM findings
             WHERE job_id = ?
             ORDER BY created_at

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ..utils.exec import run_cmd
+from ..db import DB_PATH
 
 
 def build_evidence_pack(
@@ -38,6 +41,19 @@ def build_evidence_pack(
         gitleaks.get("stdout", ""), encoding="utf-8"
     )
 
+    # Dump prioritized findings
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM findings WHERE job_id = ? ORDER BY risk_score DESC", (job_id,)
+    ).fetchall()
+    conn.close()
+
+    findings_list = [dict(r) for r in rows]
+    (pack_root / "prioritized_findings.json").write_text(
+        json.dumps(findings_list, indent=2), encoding="utf-8"
+    )
+
     report_md = _render_report(project_name=project_name, job_id=job_id)
     (pack_root / "REPORT.md").write_text(report_md, encoding="utf-8")
 
@@ -58,14 +74,21 @@ def _render_report(project_name: str, job_id: str) -> str:
 **Generated:** {datetime.now(timezone.utc).isoformat()}
 
 ## What this pack contains
+- `prioritized_findings.json` — All findings scored by the Risk-Based Prioritization Engine
 - `raw/semgrep.json` — SAST scan results (Semgrep)
 - `raw/osv.json` — Dependency vulnerability results (OSV-Scanner)
 - `raw/gitleaks.json` — Secret detection results (Gitleaks)
 - This `REPORT.md` summary
 
+## Risk Score Methodology
+The Risk-Based Prioritization Engine calculates a `risk_score` for each finding using the following criteria:
+1. **Base Score**: Severity weight + Category weight (e.g. CRITICAL=100, Secret=35).
+2. **ML Modifier**: Machine Learning confidence score (+ up to 50 points).
+3. **Reachability**: If a finding is verifiably reachable in code, its total score is multiplied by 1.5.
+
 ## Methodology (high-level)
 1. Scan codebase for vulnerabilities (SAST, dependency CVEs, secrets).
-2. Prioritize findings by severity and likely impact.
+2. Prioritize findings using the Risk Engine.
 3. Apply or suggest minimal remediation steps.
 4. Provide verification artifacts and re-scan outputs.
 
