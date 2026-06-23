@@ -33,6 +33,7 @@ class Finding(BaseModel):
     reachability: Optional[Reachability] = None
     features: Optional[Dict[str, Any]] = Field(default_factory=dict)
     ml_score: Optional[float] = None
+    risk_score: Optional[float] = None
 
 
 class ScanResponse(BaseModel):
