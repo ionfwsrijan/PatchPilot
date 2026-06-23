@@ -78,6 +78,9 @@ MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 logger = logging.getLogger(__name__)
 app = FastAPI(title="PatchPilot API", version="0.1.0")
 
+from app.ml.root_cause.api import router as root_cause_router
+app.include_router(root_cause_router)
+
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -900,6 +903,37 @@ async def get_verify(job_id: str):
         raise HTTPException(
             status_code=404, detail=f"No verify outcome recorded yet for job '{job_id}'"
         )
+
+# ==== Attack Path Correlation Endpoint ====
+from .attack_paths.engine import generate_attack_paths
+
+@app.get("/attack-paths/{job_id}")
+async def get_attack_paths(job_id: str):
+    """Return attack path analysis for a scan job.
+    
+    Generates attack paths from stored findings, scores them, and returns the
+    highest‑risk path along with all paths.
+    """
+    paths = await generate_attack_paths(job_id)
+    if not paths:
+        raise HTTPException(status_code=404, detail="No attack paths found")
+    # Sort by risk_score descending
+    paths.sort(key=lambda p: p.risk_score, reverse=True)
+    top = paths[0]
+    return {
+        "attack_path_id": top.id,
+        "risk_score": top.risk_score,
+        "steps": [step.label for step in top.steps],
+        "all_paths": [
+            {
+                "id": p.id,
+                "risk_score": p.risk_score,
+                "steps": [step.label for step in p.steps],
+            }
+            for p in paths
+        ],
+    }
+
 
     return dict(zip(columns, row))
 

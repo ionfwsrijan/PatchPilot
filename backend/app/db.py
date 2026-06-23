@@ -65,6 +65,23 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS root_cause_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS root_cause_group_finding (
+                group_id TEXT NOT NULL,
+                finding_id TEXT NOT NULL,
+                FOREIGN KEY(group_id) REFERENCES root_cause_groups(id),
+                FOREIGN KEY(finding_id) REFERENCES findings(id),
+                PRIMARY KEY(group_id, finding_id)
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS dependency_links (
                 id TEXT PRIMARY KEY,
                 org_job_id TEXT NOT NULL,
