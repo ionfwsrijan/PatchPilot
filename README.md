@@ -144,6 +144,14 @@ For questions and ideas, open a [Discussion](https://github.com/ionfwsrijan/Patc
 
 Found a vulnerability in PatchPilot itself? Please **do not** open a public issue. Read [SECURITY.md](SECURITY.md) for the responsible disclosure process.
 
+## Mentors
+
+Thanks to our mentors who guide the project and review contributions.
+
+## Contributors
+
+Thanks to all the [contributors](https://github.com/ionfwsrijan/PatchPilot/graphs/contributors) who help build and maintain PatchPilot.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
