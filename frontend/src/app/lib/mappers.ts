@@ -24,20 +24,24 @@ function mapTool(tool?: string): Tool {
   return allowedTools.includes(tool as Tool) ? (tool as Tool) : "semgrep";
 }
 
-export function mapBackendFindingToUi(f: BackendFinding): Finding {
+export function mapBackendFindingToUi(f: any): Finding {
+  const filePath = f.location?.path || f.file_path || "Unknown file";
+  const startLine = f.location?.start_line || f.line_number || 1;
+  const tool = f.metadata?.engine || f.scanner || "semgrep";
+
   return {
     id: f.id,
     severity: mapSeverity(f.severity),
     category: f.category,
-    title: f.title,
+    title: f.title || f.rule_id || "Vulnerability",
 
-    file: f.location?.path ?? "Unknown file",
-    lineNumber: f.location?.start_line ?? 1,
-    tool: mapTool(f.metadata?.engine),
+    file: filePath,
+    lineNumber: startLine,
+    tool: mapTool(tool),
 
     confidence: f.confidence ?? 100,
-    status: "open",
-    description: f.description ?? "",
+    status: f.status || "open",
+    description: f.description ?? f.message ?? "",
     code: f.code ?? "",
     suggestedFix: f.suggested_fix,
     references: f.references ?? [],
