@@ -48,7 +48,7 @@ Everything runs locally. No data leaves your machine.
 
 ---
 
-## ⚡ Quickstart
+## ⚡ How To Run
 
 ### Prerequisites
 
