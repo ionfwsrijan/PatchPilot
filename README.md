@@ -2,7 +2,7 @@
 
 # 🛡️ PatchPilot
 
-### Automated code security triage — scan, fix, verify, and export compliance evidence. All local. All free.
+### Automated code security triage — scan, fix, verify, and export compliance evidence. All local. All free.##
 
 [![CI](https://github.com/ionfwsrijan/PatchPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/ionfwsrijan/PatchPilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -14,18 +14,20 @@
 
 ---
 
-**PatchPilot lets you upload a codebase (ZIP) or import a GitHub repository URL, run multiple security scanners in one shot, get proposed fixes, verify them, and download a compliance evidence pack — without paying for any external service.**
+PatchPilot lets you upload a codebase (ZIP) or import a GitHub repository URL, run multiple security scanners in one shot, get proposed fixes, verify them, and download a compliance evidence pack — without paying for any external service.
 
-## What it does
+## 🚀 What It Does
 
-| Step | What happens |
+| Step | What Happens |
 |---|---|
 | **Scan** | Runs SAST + dependency + secret scanning in parallel |
 | **Fix** | Proposes remediations for selected findings |
 | **Verify** | Re-runs checks to confirm fixes didn't introduce new issues |
 | **Evidence Pack** | Exports a ZIP with audit artifacts and diffs for compliance |
 
-## Scanners
+---
+
+## 🔍 Scanners
 
 - [Semgrep](https://semgrep.dev/) — static analysis (SAST)
 - [OSV-Scanner](https://google.github.io/osv-scanner/) — dependency vulnerabilities
@@ -35,7 +37,18 @@ Everything runs locally. No data leaves your machine.
 
 ---
 
-## Quickstart
+## 🛠️ Tech Stack
+
+| Category | Stack |
+|---|---|
+| **Backend** | ![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi) |
+| **Frontend** | ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB) ![Vite](https://img.shields.io/badge/Vite-646CFF?style=flat&logo=vite&logoColor=white) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=flat&logo=tailwindcss&logoColor=white) |
+| **Database** | ![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white) |
+| **ML** | ![Scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?style=flat&logo=scikit-learn&logoColor=white) |
+
+---
+
+## ⚡ Quickstart
 
 ### Prerequisites
 
@@ -75,7 +88,7 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## API reference
+## 🔌 API Reference
 
 | Method | Route | Description |
 |---|---|---|
@@ -95,7 +108,7 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## ML roadmap
+## 🧠 ML Roadmap
 
 PatchPilot is being transformed from a rule-based scanner into an intelligent, self-improving security platform — layer by layer. All models use free, locally-running tools (no API keys).
 
@@ -109,7 +122,7 @@ Each tier feeds training data into the next. See [CONTRIBUTING.md](CONTRIBUTING.
 
 ---
 
-## Repository structure
+## 📂 Repository structure
 
 ```
 PatchPilot/
@@ -132,7 +145,7 @@ PatchPilot/
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome — especially ML components advancing the roadmap above.
 
@@ -140,10 +153,14 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, branch conventio
 
 For questions and ideas, open a [Discussion](https://github.com/ionfwsrijan/PatchPilot/discussions) rather than an issue.
 
-## Security
+---
+
+## 🔒 Security
 
 Found a vulnerability in PatchPilot itself? Please **do not** open a public issue. Read [SECURITY.md](SECURITY.md) for the responsible disclosure process.
 
-## License
+---
+
+## 📄 License
 
 MIT — see [LICENSE](LICENSE).
