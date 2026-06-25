@@ -1,0 +1,72 @@
+name: Issue Triage
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add needs-triage label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                labels: ["needs-triage"]
+              });
+            } catch (error) {
+              console.log(error.message);
+            }
+
+      - name: Welcome contributor and notify mentors
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const user = context.payload.issue.user.login;
+
+            const message = [
+              `👋 Thanks for opening this issue, @${user}!`,
+              "",
+              "## What happens next?",
+              "",
+              "1. A maintainer will review this issue.",
+              "2. Once approved, comment:",
+              "",
+              "```",
+              "/assign",
+              "```",
+              "",
+              "to request assignment.",
+              "",
+              "⚡ **Want faster assignment and discussion?**",
+              "",
+              "Join our Discord:",
+              "https://discord.gg/FcXuyw2Rs",
+              "",
+              "### 🔔 Mentor Review Requested",
+              "",
+              "@adikulkarni006",
+              "@arpit2006",
+              "",
+              "Please review this issue and determine whether it is ready to be assigned.",
+              "",
+              "Thank you for contributing to PatchPilot! 🚀"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: message
+            });
