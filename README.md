@@ -2,7 +2,7 @@
 
 # 🛡️ PatchPilot
 
-### Automated code security triage — scan, fix, verify, and export compliance evidence. All local. All free.##
+### Automated code security triage — scan, fix, verify, and export compliance evidence. All local. All free.
 
 [![CI](https://github.com/ionfwsrijan/PatchPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/ionfwsrijan/PatchPilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
