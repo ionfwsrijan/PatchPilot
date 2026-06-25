@@ -447,7 +447,7 @@ export function Findings() {
                 {selectedFindings.size !== 1 ? "s" : ""} selected
               </span>
               <div className="flex gap-2">
-                <Link to="/fix">
+                <Link to="/fix" state={{ findingIds: [...selectedFindings] }}>
                   <Button size="sm">Propose Fixes</Button>
                 </Link>
                 <Button variant="outline" size="sm" disabled>
@@ -707,7 +707,7 @@ export function Findings() {
                           </div>
                         </div>
                         <div className="flex gap-3 mt-2">
-                          <Link to="/fix" className="flex-1">
+                          <Link to="/fix" state={{ findingIds: [detailFinding.id] }} className="flex-1">
                             <Button className="w-full shadow-sm">Apply Fix</Button>
                           </Link>
                           <Button variant="outline" disabled className="flex-1 bg-muted/5">
