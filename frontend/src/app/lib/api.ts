@@ -348,3 +348,17 @@ export const getOrgBlastRadius = async (orgJobId: string) => {
   }
   return response.json();
 };
+
+export interface OllamaHealthResponse {
+  available: boolean;
+  models: string[];
+  base_url: string;
+}
+
+export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
+  const res = await fetch(`${API_BASE}/api/health/ollama`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}

@@ -140,7 +140,7 @@ async def ollama_health():
     Ping the local Ollama service to verify availability and list installed models.
     Fails gracefully to prevent 500 errors if the service is down.
     """
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     timeout = httpx.Timeout(3.0)
 
     try:
@@ -161,7 +161,7 @@ async def ollama_health():
                     "models": [],
                     "base_url": base_url,
                 }
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as e:
+    except (httpx.RequestError, ValueError, AttributeError, TypeError) as e:
         logger.warning(f"Ollama health check failed: {e}")
         return {
             "available": False,
