@@ -11,12 +11,12 @@ def test_label_finding_success():
     """Test that a finding can be successfully labeled as a false positive."""
     mock_db = AsyncMock()
     mock_cursor = AsyncMock()
-    mock_cursor.fetchone.return_value = {"id": "fake-finding-123"}
+    mock_cursor.fetchone.return_value = {"id": "fake-finding-123", "version": 1}
     mock_db.execute.return_value = mock_cursor
 
     with patch("app.main.get_db", AsyncMock(return_value=mock_db)):
         response = client.post(
-            "/findings/fake-finding-123/label", json={"false_positive": True}
+            "/findings/fake-finding-123/label", json={"false_positive": True, "expected_version": 1}
         )
 
     assert response.status_code == 200
@@ -38,7 +38,7 @@ def test_label_finding_not_found():
 
     with patch("app.main.get_db", AsyncMock(return_value=mock_db)):
         response = client.post(
-            "/findings/missing-finding-404/label", json={"false_positive": False}
+            "/findings/missing-finding-404/label", json={"false_positive": False, "expected_version": 1}
         )
 
     assert response.status_code == 404
