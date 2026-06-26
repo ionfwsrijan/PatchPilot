@@ -56,6 +56,7 @@ features?: Record<string, unknown>;
   references?: string[];
   ml_score?: number;
   false_positive?: boolean | number | null;
+  version?: number;
 };
 
 export type ScanInitResponse = {
@@ -106,11 +107,12 @@ export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
   return (await res.json()) as BackendFinding[];
 }
 
-export async function labelFinding(findingId: string, falsePositive: boolean) {
+export async function labelFinding(findingId: string, falsePositive: boolean, expectedVersion: number, signal?: AbortSignal) {
   const res = await fetch(`${API_BASE}/findings/${findingId}/label`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ false_positive: falsePositive }),
+    body: JSON.stringify({ false_positive: falsePositive, expected_version: expectedVersion }),
+    signal,
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

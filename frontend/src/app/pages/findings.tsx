@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   Search,
   Filter,
@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   ThumbsUp,
   ThumbsDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { downloadAuditReport } from "../lib/api";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -46,7 +48,7 @@ import type { Finding } from "../data/sample-data";
 import { loadLastScan } from "../lib/scan-store";
 import { getJobFindings, updateFindingStatus, labelFinding } from "../lib/api";
 
-type UiFinding = Finding & { false_positive?: boolean | null };
+type UiFinding = Finding & { false_positive?: boolean | null, version?: number };
 import { mapBackendFindingToUi } from "../lib/mappers";
 import { cn } from "../components/ui/utils";
 
@@ -174,16 +176,24 @@ export function Findings() {
   const [detailFinding, setDetailFinding] = useState<UiFinding | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [sortBy, setSortBy] = useState<"severity" | "ml_score">("severity");
-  const [labelingId, setLabelingId] = useState<string | null>(null);
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 150;
+  const labelingId = null;
+  const abortControllers = useRef<Record<string, AbortController>>({});
 
   const handleLabelFalsePositive = async (findingId: string, isFalsePositive: boolean, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (labelingId === findingId) return;
     
-    setLabelingId(findingId);
+    if (abortControllers.current[findingId]) {
+      abortControllers.current[findingId].abort();
+    }
+    const controller = new AbortController();
+    abortControllers.current[findingId] = controller;
     
     const previousFinding = findings.find(f => f.id === findingId);
     const previousValue = previousFinding?.false_positive;
+    const currentVersion = previousFinding?.version || 1;
 
     setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, false_positive: isFalsePositive } : f));
     if (detailFinding && detailFinding.id === findingId) {
@@ -191,16 +201,25 @@ export function Findings() {
     }
     
     try {
-      await labelFinding(findingId, isFalsePositive);
-    } catch (err) {
+      await labelFinding(findingId, isFalsePositive, currentVersion, controller.signal);
+      setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, version: currentVersion + 1 } : f));
+      if (detailFinding && detailFinding.id === findingId) {
+        setDetailFinding((prev) => prev ? { ...prev, version: currentVersion + 1 } : null);
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+      
       console.error("Failed to label finding", err);
       setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, false_positive: previousValue } : f));
       if (detailFinding && detailFinding.id === findingId) {
         setDetailFinding((prev) => prev ? { ...prev, false_positive: previousValue } : null);
       }
-      alert("Failed to update finding label. Please try again.");
-    } finally {
-      setLabelingId(null);
+      
+      if (err.message?.includes('409') || err.status === 409) {
+        alert("This finding has been modified by another user. Your changes were not saved.");
+      } else {
+        alert("Failed to update finding label. Please try again.");
+      }
     }
   };
 
@@ -288,7 +307,11 @@ export function Findings() {
     [filters],
   );
 
-    const filteredFindings = useMemo(() => {
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filters, sortBy, selectedStatuses, selectedTools]);
+
+  const filteredFindings = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
     const filtered = findings.filter((f) => {
@@ -487,7 +510,7 @@ export function Findings() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredFindings.slice(0, 150).map((finding) => (
+            {filteredFindings.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((finding) => (
               <TableRow
                 key={finding.id}
                 className={cn("cursor-pointer hover:bg-muted/50", finding.false_positive && "opacity-60 bg-muted/20")}
@@ -570,7 +593,7 @@ export function Findings() {
       </Card>
 
       <div className="md:hidden space-y-3">
-        {filteredFindings.slice(0, 150).map((finding) => (
+        {filteredFindings.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((finding) => (
           <Card
             key={finding.id}
             className={cn("hover:bg-muted/50 transition-colors cursor-pointer", finding.false_positive && "opacity-60 bg-muted/20")}
@@ -620,6 +643,35 @@ export function Findings() {
           </Card>
         ))}
       </div>
+
+      {Math.ceil(filteredFindings.length / itemsPerPage) > 1 && (
+        <Card className="mt-4">
+          <CardContent className="flex items-center justify-between p-4">
+            <span className="text-sm text-muted-foreground">
+              Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredFindings.length)} of {filteredFindings.length} findings
+            </span>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" /> Prev
+              </Button>
+              <span className="text-sm font-medium px-2">Page {currentPage} of {Math.ceil(filteredFindings.length / itemsPerPage)}</span>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredFindings.length / itemsPerPage), p + 1))}
+                disabled={currentPage === Math.ceil(filteredFindings.length / itemsPerPage)}
+              >
+                Next <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
     <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
         <SheetContent className="w-full sm:max-w-2xl overflow-y-auto flex flex-col p-6 sm:p-8">

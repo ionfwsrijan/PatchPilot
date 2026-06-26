@@ -36,6 +36,7 @@ async def init_db():
                 ml_score        REAL,
                 false_positive  INTEGER DEFAULT NULL,
                 labeled_at      TEXT DEFAULT NULL,
+                version         INTEGER DEFAULT 1,
                 created_at      TEXT DEFAULT (datetime('now'))
             )
         """)
@@ -96,6 +97,11 @@ async def init_db():
         if "labeled_at" not in columns:
             await db.execute(
                 "ALTER TABLE findings ADD COLUMN labeled_at TEXT DEFAULT NULL"
+            )
+
+        if "version" not in columns:
+            await db.execute(
+                "ALTER TABLE findings ADD COLUMN version INTEGER DEFAULT 1"
             )
 
         cursor = await db.execute("PRAGMA table_info(jobs)")
