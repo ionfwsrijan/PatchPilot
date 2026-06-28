@@ -88,7 +88,18 @@ async def init_db():
                 created_at      TEXT DEFAULT (datetime('now'))
             )
         """)
-
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS patch_outcomes (
+                id              TEXT PRIMARY KEY,
+                job_id          TEXT NOT NULL,
+                finding_id      TEXT NOT NULL,
+                model           TEXT NOT NULL,
+                passed          INTEGER,
+                prompt_tokens   INTEGER,
+                created_at      TEXT DEFAULT (datetime('now')),
+                verified_at     TEXT
+            )
+        """)
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("PRAGMA table_info(findings)")
         columns = [row["name"] for row in await cursor.fetchall()]
@@ -297,5 +308,25 @@ async def upsert_contributor_stat(
                 last_updated = datetime('now')
         """,
             (username, findings, fixes, prs),
+        )
+        await db.commit()
+
+        async def insert_patch_outcome(patch_id: str, job_id: str, finding_id: str, model: str, prompt_tokens: int = None):
+    """Inserts a new patch record when an LLM generates a fix."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO patch_outcomes (id, job_id, finding_id, model, passed, prompt_tokens) VALUES (?, ?, ?, ?, NULL, ?)",
+            (patch_id, job_id, finding_id, model, prompt_tokens)
+        )
+        await db.commit()
+
+
+async def update_patch_verification(patch_id: str, passed: bool):
+    """Updates the verification status and timestamp of an existing patch."""
+    passed_int = 1 if passed else 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE patch_outcomes SET passed = ?, verified_at = datetime('now') WHERE id = ?",
+            (passed_int, patch_id)
         )
         await db.commit()

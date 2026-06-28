@@ -751,7 +751,7 @@ async def _record_fixes_to_db(job_id: str, fixes: List[Fix]):
 
 
 @app.post("/fix", response_model=FixResponse)
-def fix(req: FixRequest, background_tasks: BackgroundTasks):
+async def fix(req: FixRequest, background_tasks: BackgroundTasks):
     job_dir = WORK_ROOT / req.job_id
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
@@ -759,6 +759,22 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
     fixes = propose_fixes(repo_dir, req.finding_ids)
+
+    import uuid
+    from app.db import insert_patch_outcome
+
+    for f_id in req.finding_ids:
+        patch_id = str(uuid.uuid4())
+        model_name = getattr(req, "model", "Ollama-Local")
+        tokens = getattr(req, "prompt_tokens", None)
+        
+        await insert_patch_outcome(
+            patch_id=patch_id,
+            job_id=req.job_id,
+            finding_id=f_id,
+            model=model_name,
+            prompt_tokens=tokens
+        )
 
     background_tasks.add_task(_record_fixes_to_db, req.job_id, fixes)
 
@@ -846,6 +862,12 @@ async def verify(
                 ),
             )
             await db.commit()
+
+            # --- UPDATE THE PATCH OUTCOMES TRACKING TABLE ---
+            from app.db import update_patch_verification
+            await update_patch_verification(patch_id=job_id, passed=bool(passed))
+            # ------------------------------------------------
+
         finally:
             await db.close()
     except Exception:
