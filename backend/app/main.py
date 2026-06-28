@@ -10,7 +10,6 @@ import re
 import shutil
 import tempfile
 import uuid
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -68,7 +67,6 @@ from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
 from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
-
 
 GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
