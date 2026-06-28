@@ -31,7 +31,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-import logging
 logger = logging.getLogger(__name__)
 
 # Optional ML Dependencies Graceful Fallback
@@ -41,21 +40,29 @@ try:
     from app.ml.ranker import load_ranker, scoring_function
     ML_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"ML dependencies not found ({e}). Running in lightweight mode with ML features disabled. To enable, run: pip install -r backend/requirements-ml.txt")
+    logger.warning(
+        f"ML dependencies not found ({e}). Running in lightweight mode with ML features disabled. "
+        "To enable, run: pip install -r backend/requirements-ml.txt"
+    )
     ML_AVAILABLE = False
     SENTENCE_TRANSFORMERS_AVAILABLE = False
 
-    # Mock ML functions to prevent runtime crashes
-    def deduplicate(findings, epsilon): return findings
-    def load_ranker(): return None
-    def scoring_function(findings, ranker): return findings
+    # Mock ML functions to prevent runtime crashes (Properly indented for Black/Flake8)
+    def deduplicate(findings, epsilon):
+        return findings
+
+    def load_ranker():
+        return None
+
+    def scoring_function(findings, ranker):
+        return findings
     
     class DummyPredictor:
         def adjust_scores(self, ml_input):
             # Just return the original scores without modification
             return [item.get("ml_score", 1.0) for item in ml_input]
+            
     predictor = DummyPredictor()
-
 
 from .db import (
     get_cwe_distribution,
@@ -100,7 +107,7 @@ except ValueError:
 MAX_UPLOAD_MB = max(1, MAX_UPLOAD_MB)
 MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 
-logger = logging.getLogger(__name__)
+
 app = FastAPI(title="PatchPilot API", version="0.1.0")
 
 ALLOWED_ORIGINS = [
