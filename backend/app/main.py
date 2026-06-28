@@ -348,6 +348,7 @@ def finding_key(f: Finding):
         line_number,
     )
 
+
 def github_zip_url(repo_url: str, ref: str = "main") -> str:
     repo_url = repo_url.strip()
     m = re.match(
