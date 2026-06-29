@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import subprocess
 import asyncio
 import functools
 import json
@@ -65,6 +65,18 @@ from .models import (
     ScanResponse,
     VerifyResponse,
 )
+
+
+def validate_git_ref(repo_url: str, ref: str) -> bool:
+    try:
+        # Use ls-remote to check if ref exists in the remote repo
+        subprocess.check_output(["git", "ls-remote", repo_url, ref])
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+
 from .remediation.engine import propose_fixes
 from .reports.evidence_pack import build_evidence_pack
 from .reports.pdf_builder import generate_audit_pdf, generate_org_audit_pdf
@@ -142,6 +154,25 @@ def health():
         "scanners": scanners,
     }
 
+@app.post("/scan-url")
+async def scan_url(
+    background_tasks: BackgroundTasks,
+    repo_url: str = Form(...),
+    ref: str = Form("main"),
+    project_name: str = Form("project"),
+):
+    if not validate_git_ref(repo_url, ref):
+        raise HTTPException(status_code=400, detail=f"Invalid git ref: {ref}")
+
+    job_id = next(tempfile._get_candidate_names())
+    job_dir = WORK_ROOT / job_id
+    ensure_dir(job_dir)
+    archive_path = job_dir / "repo.zip"
+    repo_dir = job_dir / "repo"
+    ensure_dir(repo_dir)
+    zip_url = github_zip_url(repo_url, ref=ref)
+
+  
 
 @app.get("/api/health/ollama", tags=["Health"])
 async def ollama_health():
