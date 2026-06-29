@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+<<<<<<< HEAD
 logger = logging.getLogger(__name__)
 
 # Optional ML Dependencies Graceful Fallback
@@ -64,6 +65,8 @@ except ImportError as e:
             
     predictor = DummyPredictor()
 
+=======
+>>>>>>> 3a0c807 (style(backend): sort imports and move all standard/local imports to top to fix Ruff I001 & E402)
 from .db import (
     get_cwe_distribution,
     get_db,
@@ -96,6 +99,39 @@ from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
 from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
 
+logger = logging.getLogger(__name__)
+
+# Optional ML Dependencies Graceful Fallback
+try:
+    from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+    from app.ml.fp_predictor import predictor
+    from app.ml.ranker import load_ranker, scoring_function
+    ML_AVAILABLE = True
+except ImportError as e:
+    logger.warning(
+        f"ML dependencies not found ({e}). Running in lightweight mode with ML features disabled. "
+        "To enable, run: pip install -r backend/requirements-ml.txt"
+    )
+    ML_AVAILABLE = False
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+    # Mock ML functions to prevent runtime crashes
+    def deduplicate(findings, epsilon):
+        return findings
+
+    def load_ranker():
+        return None
+
+    def scoring_function(findings, ranker):
+        return findings
+    
+    class DummyPredictor:
+        def adjust_scores(self, ml_input):
+            # Just return the original scores without modification
+            return [item.get("ml_score", 1.0) for item in ml_input]
+            
+    predictor = DummyPredictor()
+
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
 
@@ -103,6 +139,8 @@ try:
     MAX_UPLOAD_MB = int(_MAX_UPLOAD_MB_RAW) if _MAX_UPLOAD_MB_RAW else 100
 except ValueError:
     MAX_UPLOAD_MB = 100
+
+
 
 MAX_UPLOAD_MB = max(1, MAX_UPLOAD_MB)
 MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
