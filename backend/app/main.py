@@ -97,6 +97,7 @@ def validate_git_ref(ref: str) -> str:
 
     return ref
 
+
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
 
