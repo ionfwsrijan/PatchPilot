@@ -21,7 +21,11 @@ def get_model():
 def deduplicate(findings: List[Finding], epsilon: float = 0.15) -> List[Finding]:
     """
     Deduplicates finding descriptions/messages using SentenceTransformer embeddings.
-    Returns the original findings list if sentence-transformers is unavailable or if loading/encoding fails.
+
+    Note: sentence-transformers is an optional dependency. If the package or its
+    dependencies (e.g. numpy) are not available, or if loading/encoding fails,
+    this function will gracefully log a warning and return the original list of
+    findings as-is (fallback behavior) without performing deduplication.
     """
     if not findings:
         return findings

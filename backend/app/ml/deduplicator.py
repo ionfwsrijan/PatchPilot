@@ -28,6 +28,11 @@ def deduplicate(
     """
     Group similar findings using DBSCAN and return
     representative findings with duplicate metadata.
+
+    Note: sentence-transformers is an optional dependency. If the package or its
+    dependencies (e.g. numpy, scikit-learn) are not available, or if loading/encoding
+    fails, this function will fall back to returning the original list of findings
+    as-is without performing deduplication.
     """
     if not findings:
         return []

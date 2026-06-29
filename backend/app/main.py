@@ -45,7 +45,6 @@ from .db import (
     upsert_contributor_stat,
 )
 from .models import (
-    DeduplicatedScanResponse,
     Finding,
     FindingStatusUpdate,
     Fix,
