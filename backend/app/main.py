@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
 from app.ml.fp_predictor import predictor
 from app.ml.ranker import load_ranker, scoring_function
+from app.ml.fix_predictor import predict_confidence
 
 from .db import (
     get_cwe_distribution,
@@ -756,10 +757,11 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
-
+    
     repo_dir = _maybe_use_single_top_folder(repo_dir)
     fixes = propose_fixes(repo_dir, req.finding_ids)
-
+    # Predict and assign confidence, then sort
+    fixes = predict_confidence(fixes)
     background_tasks.add_task(_record_fixes_to_db, req.job_id, fixes)
 
     return FixResponse(job_id=req.job_id, fixes=fixes)
