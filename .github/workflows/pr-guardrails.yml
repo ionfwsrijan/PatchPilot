@@ -249,6 +249,9 @@ jobs:
               core.setFailed("🚨 PR Template Validation Failed: Missing required sections, explanations, or checkboxes.");
               
             } else {
+              // ── Validation passed ──────────────────────────────────────────
+
+              // 1. Remove needs-work label if present
               try {
                 await github.rest.issues.removeLabel({
                   ...repoInfo,
@@ -258,6 +261,7 @@ jobs:
                 console.log("Removed 'needs-work' label.");
               } catch (error) {}
 
+              // 2. Delete the old warning comment if it exists
               try {
                 const comments = await github.rest.issues.listComments({
                   ...repoInfo,
@@ -272,8 +276,43 @@ jobs:
                   });
                   console.log("Deleted warning comment.");
                 }
+
+                // 3. Request review from maintainer — only once per PR
+                //    Re-requesting on every commit push would spam the reviewer,
+                //    so check if a review request for arpit2006 already exists.
+                const reviewRequests = await github.rest.pulls.listRequestedReviewers({
+                  ...repoInfo,
+                  pull_number: prNumber
+                });
+                const alreadyRequested = reviewRequests.data.users.some(
+                  u => u.login === 'arpit2006'
+                );
+
+                if (!alreadyRequested) {
+                  await github.rest.pulls.requestReviewers({
+                    ...repoInfo,
+                    pull_number: prNumber,
+                    reviewers: ['arpit2006']
+                  });
+                  console.log("Review requested from @arpit2006.");
+                }
+
+                // 4. Ping maintainer in comment — only once per PR
+                const alreadyPinged = comments.data.some(c =>
+                  c.body.includes("✅ **PR template check passed**")
+                );
+
+                if (!alreadyPinged) {
+                  await github.rest.issues.createComment({
+                    ...repoInfo,
+                    issue_number: prNumber,
+                    body: `✅ **PR template check passed!**\n\n@arpit2006 this PR is ready for your review. 🚀`
+                  });
+                  console.log("Pinged maintainer @arpit2006 for review.");
+                }
+
               } catch (error) {
-                console.log("Could not delete comment: ", error.message);
+                console.log("Post-validation step error: ", error.message);
               }
             }
 

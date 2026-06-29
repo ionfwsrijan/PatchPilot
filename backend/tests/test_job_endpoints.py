@@ -20,7 +20,10 @@ FINDINGS_COLS = (
     "cwe",
     "scanner",
     "message",
+    "package_name",
+    "package_version",
     "created_at",
+    "ml_score",
 )
 VERIFY_COLS = ("id", "job_id", "passed", "new_issues_introduced", "verified_at")
 
@@ -35,7 +38,10 @@ FINDINGS = [
         None,
         "semgrep",
         "Hardcoded secret detected",
+        None,
+        None,
         "2024-01-01 00:00:00",
+        0.85,
     ),
     (
         str(uuid.uuid4()),
@@ -47,7 +53,10 @@ FINDINGS = [
         None,
         "osv",
         "Vulnerable dependency",
+        None,
+        None,
         "2024-01-01 00:00:01",
+        None,
     ),
     (
         str(uuid.uuid4()),
@@ -59,7 +68,10 @@ FINDINGS = [
         None,
         "gitleaks",
         "API key exposed",
+        None,
+        None,
         "2024-01-01 00:00:02",
+        0.95,
     ),
 ]
 
@@ -140,7 +152,15 @@ class TestGetFindings:
         f = res.json()["findings"][0]
         assert all(
             k in f
-            for k in ("id", "rule_id", "severity", "category", "scanner", "message")
+            for k in (
+                "id",
+                "rule_id",
+                "severity",
+                "category",
+                "scanner",
+                "message",
+                "ml_score",
+            )
         )
 
 

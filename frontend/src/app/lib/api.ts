@@ -54,6 +54,9 @@ features?: Record<string, unknown>;
   code?: string;
   suggested_fix?: string;
   references?: string[];
+  ml_score?: number;
+  false_positive?: boolean | number | null;
+  version?: number;
 };
 
 export type ScanInitResponse = {
@@ -102,6 +105,38 @@ export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
   const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as BackendFinding[];
+}
+
+export async function labelFinding(
+  findingId: string,
+  falsePositive: boolean,
+  expectedVersion: number,
+  signal?: AbortSignal,
+) {
+  const res = await fetch(`${API_BASE}/findings/${findingId}/label`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ false_positive: falsePositive, expected_version: expectedVersion }),
+    signal,
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    const error = new Error(errText);
+    (error as any).status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
+export async function updateFindingStatus(findingId: string, status: "open" | "accepted" | "ignored") {
+  const res = await fetch(`${API_BASE}/findings/${findingId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function fix(jobId: string, findingIds: string[]) {
@@ -323,3 +358,17 @@ export const getOrgBlastRadius = async (orgJobId: string) => {
   }
   return response.json();
 };
+
+export interface OllamaHealthResponse {
+  available: boolean;
+  models: string[];
+  base_url: string;
+}
+
+export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
+  const res = await fetch(`${API_BASE}/api/health/ollama`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}

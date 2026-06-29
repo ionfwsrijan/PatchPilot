@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { CheckCircle2, XCircle, Clock, Download, FileText } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "../components/ui/button";
@@ -11,7 +11,7 @@ import {
 } from "../components/ui/card";
 import { cn } from "../components/ui/utils";
 
-import { downloadEvidencePack } from "../lib/api";
+import { downloadEvidencePack, verify } from "../lib/api";
 import { loadLastScan } from "../lib/scan-store";
 
 interface VerificationCheck {
@@ -45,70 +45,65 @@ export function Verify() {
 
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isVerified, setIsVerified] = useState<boolean | null>(null);
 
-  const verificationChecks: VerificationCheck[] = [
-    {
-      id: "deps",
-      name: "Install Dependencies",
-      status: "pass",
-      duration: "45s",
-      output: "All dependencies installed successfully",
-    },
-    {
-      id: "tests",
-      name: "Run Tests",
-      status: "pass",
-      duration: "1m 23s",
-      output: "127 tests passed, 0 failed",
-    },
-    {
-      id: "build",
-      name: "Build Application",
-      status: "pass",
-      duration: "2m 12s",
-      output: "Build completed successfully",
-    },
-    {
-      id: "lint",
-      name: "Lint Check",
-      status: "pass",
-      duration: "18s",
-      output: "No linting errors found",
-    },
-  ];
+  const [verificationChecks, setVerificationChecks] = useState<VerificationCheck[]>([
+    { id: "init", name: "Sandbox Environment", status: "running", output: "Waking up backend sandbox..." }
+  ]);
 
-  const timeline: TimelineEvent[] = [
-    {
-      id: "1",
-      timestamp: "14:23:05",
-      event: `Scan started for ${scan?.project_name ?? "project"}`,
-      status: "completed",
-    },
-    {
-      id: "2",
-      timestamp: "14:25:39",
-      event: `All tools completed - ${(scan as any)?.finding_count ?? 0} findings detected`,
-      status: "completed",
-    },
-    {
-      id: "3",
-      timestamp: "14:28:15",
-      event: "Fixes proposed and applied",
-      status: "completed",
-    },
-    {
-      id: "4",
-      timestamp: "14:30:42",
-      event: "Verification checks running",
-      status: "completed",
-    },
-    {
-      id: "5",
-      timestamp: "14:35:15",
-      event: "Evidence pack generated",
-      status: "current",
-    },
-  ];
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([
+    { id: "1", timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}), event: `Scan context loaded for ${scan?.project_name ?? "project"}`, status: "completed" },
+    { id: "2", timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}), event: "Running dynamic verification checks...", status: "current" }
+  ]);
+
+  useEffect(() => {
+    if (!scan?.job_id) {
+      setVerificationChecks([{ id: "err", name: "Status Error", status: "fail", output: "No active Job ID found." }]);
+      setIsVerified(false);
+      return;
+    }
+
+    verify(scan.job_id)
+      .then((res: any) => {
+        const passed = res?.ok ?? res?.passed ?? false;
+        setIsVerified(passed);
+        
+        // If backend returns an array of specific checks, map them. Otherwise, provide a generic result.
+        if (res?.checks && Array.isArray(res.checks)) {
+          setVerificationChecks(res.checks);
+        } else {
+          setVerificationChecks([
+            {
+              id: "sandbox",
+              name: "Sandbox Verification Result",
+              status: passed ? "pass" : "fail",
+              duration: res?.duration ? `${res.duration}s` : undefined,
+              output: passed ? "No new issues introduced. Environment stable." : "Verification failed. New issues detected."
+            }
+          ]);
+        }
+
+        setTimeline(prev => {
+          if (prev.some(t => t.event === "Verification complete")) return prev;
+          return [
+            ...prev.map(t => ({ ...t, status: "completed" as const })),
+            { id: crypto.randomUUID(), timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}), event: "Verification complete", status: "completed" }
+          ];
+        });
+      })
+      .catch((err) => {
+        console.error("Verification error:", err);
+        setIsVerified(false);
+        setVerificationChecks([{ id: "err", name: "Sandbox Request", status: "fail", output: err?.message || "Failed to reach sandbox environment." }]);
+        setTimeline(prev => {
+          if (prev.some(t => t.event === "Verification encountered an error")) return prev;
+          return [
+            ...prev.map(t => ({ ...t, status: "completed" as const })),
+            { id: crypto.randomUUID(), timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'}), event: "Verification encountered an error", status: "completed" }
+          ];
+        });
+      });
+  }, [scan?.job_id]);
 
   const evidenceItems = [
     { name: "Findings selected", value: "From scan results", included: true },
@@ -169,11 +164,15 @@ export function Verify() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Verification Checks</CardTitle>
-              <CardDescription>All checks passed successfully</CardDescription>
+              <CardDescription>
+                {isVerified === null ? "Running checks in sandbox..." : (isVerified ? "All checks passed successfully" : "Verification checks failed")}
+              </CardDescription>
             </div>
-            <div className="flex items-center gap-2 text-status-success">
-              <CheckCircle2 className="h-5 w-5" />
-              <span className="font-medium">Passed</span>
+            <div className={cn("flex items-center gap-2", isVerified === null ? "text-status-pending" : (isVerified ? "text-status-success" : "text-status-error"))}>
+              {isVerified === null ? <Clock className="h-5 w-5 animate-spin" /> : (isVerified ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />)}
+              <span className="font-medium">
+                {isVerified === null ? "Running" : (isVerified ? "Passed" : "Failed")}
+              </span>
             </div>
           </div>
         </CardHeader>
@@ -334,7 +333,7 @@ export function Verify() {
         <Link to="/findings">
           <Button variant="outline">View All Findings</Button>
         </Link>
-        <Link to="/">
+        <Link to="/dashboard">
           <Button>Start New Scan</Button>
         </Link>
       </div>

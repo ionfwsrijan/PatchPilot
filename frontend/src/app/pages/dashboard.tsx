@@ -877,7 +877,7 @@ const handleAbortScan = async (mode: "pending" | "force") => {
                             <ExportReportButton scanId={job.id} />
                           )}
                           <Link
-                            to={job.status === "completed" ? "/findings" : "/"}
+                            to={job.status === "completed" ? "/findings" : "/dashboard"}
                           >
                             <Button variant="ghost" size="sm">
                               View
@@ -894,7 +894,7 @@ const handleAbortScan = async (mode: "pending" | "force") => {
                 {recentJobs.map((job) => (
                   <Link
                     key={job.id}
-                    to={job.status === "completed" ? "/findings" : "/"}
+                    to={job.status === "completed" ? "/findings" : "/dashboard"}
                     className="block"
                   >
                     <Card className="hover:bg-muted/50 transition-colors">

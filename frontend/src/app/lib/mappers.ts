@@ -41,5 +41,6 @@ export function mapBackendFindingToUi(f: BackendFinding): Finding {
     code: f.code ?? "",
     suggestedFix: f.suggested_fix,
     references: f.references ?? [],
+    ml_score: f.ml_score,
   };
 }

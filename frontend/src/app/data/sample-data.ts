@@ -16,6 +16,7 @@ export interface Finding {
   code: string;
   suggestedFix?: string;
   references?: string[];
+  ml_score?: number;
 }
 
 export interface Job {
@@ -59,6 +60,7 @@ export const sampleFindings: Finding[] = [
       "CWE-89: SQL Injection",
       "OWASP Top 10: A03:2021 – Injection",
     ],
+    ml_score: 0.92,
   },
   {
     id: "F-002",
@@ -118,6 +120,7 @@ export async function getAwsConfig() {
       "AWS Security Best Practices",
       "CWE-798: Use of Hard-coded Credentials",
     ],
+    ml_score: 0.96,
   },
   {
     id: "F-004",
@@ -145,6 +148,7 @@ app.get('/download', (req, res) => {
       "CWE-22: Path Traversal",
       "OWASP: Path Traversal",
     ],
+    ml_score: 0.78,
   },
   {
     id: "F-005",
@@ -166,6 +170,7 @@ app.get('/download', (req, res) => {
       "GHSA-7fh5-64p2-3v2j",
       "CVE-2020-8203",
     ],
+    ml_score: 0.65,
   },
   {
     id: "F-006",
@@ -191,6 +196,7 @@ function UserProfile({ user }) {
       "CWE-79: Cross-site Scripting (XSS)",
       "React Security Best Practices",
     ],
+    ml_score: 0.58,
   },
   {
     id: "F-007",
@@ -214,6 +220,7 @@ function generateToken() {
     references: [
       "CWE-330: Use of Insufficiently Random Values",
     ],
+    ml_score: 0.35,
   },
   {
     id: "F-008",
@@ -232,6 +239,7 @@ function generateToken() {
     references: [
       "CWE-209: Information Exposure Through an Error Message",
     ],
+    ml_score: 0.22,
   },
   {
     id: "F-009",
@@ -249,6 +257,7 @@ function generateToken() {
     references: [
       "Node.js Crypto Documentation",
     ],
+    ml_score: 0.12,
   },
 ];
 

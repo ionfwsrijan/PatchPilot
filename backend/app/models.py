@@ -16,6 +16,12 @@ class Reachability(BaseModel):
     evidence: Optional[str] = None
 
 
+class FindingStatusUpdate(BaseModel):
+    status: str = Field(
+        ..., description="The new status: 'open', 'accepted', or 'ignored'"
+    )
+
+
 class Finding(BaseModel):
     id: str
     category: str
