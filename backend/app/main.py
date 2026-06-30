@@ -154,26 +154,6 @@ def health():
         "scanners": scanners,
     }
 
-@app.post("/scan-url")
-async def scan_url(
-    background_tasks: BackgroundTasks,
-    repo_url: str = Form(...),
-    ref: str = Form("main"),
-    project_name: str = Form("project"),
-):
-    if not validate_git_ref(repo_url, ref):
-        raise HTTPException(status_code=400, detail=f"Invalid git ref: {ref}")
-
-    job_id = next(tempfile._get_candidate_names())
-    job_dir = WORK_ROOT / job_id
-    ensure_dir(job_dir)
-    archive_path = job_dir / "repo.zip"
-    repo_dir = job_dir / "repo"
-    ensure_dir(repo_dir)
-    zip_url = github_zip_url(repo_url, ref=ref)
-
-  
-
 @app.get("/api/health/ollama", tags=["Health"])
 async def ollama_health():
     """
@@ -677,7 +657,11 @@ async def scan(
     )
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
-
+if not validate_git_ref(repo_url, ref):
+    raise HTTPException(
+        status_code=400,
+        detail=f"Invalid git ref: {ref}",
+    )
 @app.post("/scan-url")
 async def scan_url(
     background_tasks: BackgroundTasks,
