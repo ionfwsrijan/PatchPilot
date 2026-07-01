@@ -1,5 +1,5 @@
 from __future__ import annotations
-import subprocess
+
 import asyncio
 import functools
 import json
@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -65,18 +66,6 @@ from .models import (
     ScanResponse,
     VerifyResponse,
 )
-
-
-def validate_git_ref(repo_url: str, ref: str) -> bool:
-    try:
-        # Use ls-remote to check if ref exists in the remote repo
-        subprocess.check_output(["git", "ls-remote", repo_url, ref])
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-
-
 from .remediation.engine import propose_fixes
 from .reports.evidence_pack import build_evidence_pack
 from .reports.pdf_builder import generate_audit_pdf, generate_org_audit_pdf
@@ -86,6 +75,15 @@ from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
 from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
+
+
+def validate_git_ref(repo_url: str, ref: str) -> bool:
+    try:
+        # Use ls-remote to check if ref exists in the remote repo
+        subprocess.check_output(["git", "ls-remote", repo_url, ref])
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
@@ -657,11 +655,6 @@ async def scan(
     )
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
-if not validate_git_ref(repo_url, ref):
-    raise HTTPException(
-        status_code=400,
-        detail=f"Invalid git ref: {ref}",
-    )
 @app.post("/scan-url")
 async def scan_url(
     background_tasks: BackgroundTasks,
@@ -669,6 +662,12 @@ async def scan_url(
     ref: str = Form("main"),
     project_name: str = Form("project"),
 ):
+    if not validate_git_ref(repo_url, ref):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid git ref: {ref}",
+        )
+
     job_id = next(tempfile._get_candidate_names())
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
