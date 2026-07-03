@@ -24,6 +24,7 @@ import {
 } from "../components/ui/table";
 import { StatusPill } from "../components/status-pill";
 import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 import { cn } from "../components/ui/utils";
 import { ProgressStepper } from "../components/progress-stepper";
 
@@ -495,19 +496,31 @@ const handleAbortScan = async (mode: "pending" | "force") => {
                   </Button>
                 </div>
 
-                <div className="mt-4 space-y-2">
-                  <Input
-                    placeholder="https://github.com/owner/repo"
-                    value={repoUrl}
-                    onChange={(e) => setRepoUrl(e.target.value)}
-                    disabled={scanLoading}
-                  />
-                  <Input
-                    placeholder="Branch/ref (default: main)"
-                    value={repoRef}
-                    onChange={(e) => setRepoRef(e.target.value)}
-                    disabled={scanLoading}
-                  />
+                <div className="mt-4 space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="repo-url" className="text-sm font-medium">
+                      Repository URL
+                    </Label>
+                    <Input
+                      id="repo-url"
+                      placeholder="https://github.com/owner/repo"
+                      value={repoUrl}
+                      onChange={(e) => setRepoUrl(e.target.value)}
+                      disabled={scanLoading}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="repo-ref" className="text-sm font-medium">
+                      Branch or Ref
+                    </Label>
+                    <Input
+                      id="repo-ref"
+                      placeholder="Branch/ref (default: main)"
+                      value={repoRef}
+                      onChange={(e) => setRepoRef(e.target.value)}
+                      disabled={scanLoading}
+                    />
+                  </div>
                 </div>
 
                 <div className="mt-4 flex justify-end gap-2">
@@ -549,7 +562,11 @@ const handleAbortScan = async (mode: "pending" | "force") => {
                 </div>
 
                 <div className="mt-4 space-y-2">
+                  <Label htmlFor="org-url" className="text-sm font-medium">
+                    Organization Name
+                  </Label>
                   <Input
+                    id="org-url"
                     placeholder="https://github.com/your-org"
                     value={orgUrl}
                     onChange={(e) => setOrgUrl(e.target.value)}
