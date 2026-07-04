@@ -9,6 +9,7 @@ import random
 import re
 import shutil
 import tempfile
+import urllib.parse as urlparse
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +88,17 @@ MAX_UPLOAD_MB = max(1, MAX_UPLOAD_MB)
 MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 
 logger = logging.getLogger(__name__)
+
+def sanitize_url_for_log(url: str) -> str:
+    """Remove sensitive parts of URL before logging."""
+    try:
+        parsed = urlparse.urlparse(url)
+        # Strip userinfo, query, fragment
+        return urlparse.urlunparse((parsed.scheme, parsed.hostname or parsed.netloc,
+                                    parsed.path, None, None, None))
+    except Exception:
+        return "<malformed-url>"
+
 app = FastAPI(title="PatchPilot API", version="0.1.0")
 
 ALLOWED_ORIGINS = [
@@ -171,7 +183,7 @@ async def ollama_health():
                     "base_url": base_url,
                 }
     except (httpx.RequestError, ValueError, AttributeError, TypeError) as e:
-        logger.warning(f"Ollama health check failed: {e}")
+        logger.warning("Ollama health check failed: %s", e)
         return {
             "available": False,
             "models": [],
@@ -327,6 +339,9 @@ def finding_key(f: Finding):
 
 def github_zip_url(repo_url: str, ref: str = "main") -> str:
     repo_url = repo_url.strip()
+    VALID_REF_RE = re.compile(r'^[a-zA-Z0-9_\-\./]+$')
+    if not VALID_REF_RE.match(ref):
+        raise HTTPException(status_code=400, detail="Invalid branch reference")
     m = re.match(
         r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url, re.IGNORECASE
     )
@@ -424,7 +439,13 @@ async def download_to_path(
                     jitter = random.uniform(0.5, 1.5)
                     sleep_time = (base_delay * (2**attempt)) + jitter
                     logger.warning(
-                        f"Rate limited (status {status_code_for_retry}) on {url}. Retrying in {sleep_time:.2f}s..."
+                        "Rate limit hit during download",
+                        extra={
+                            "url": sanitize_url_for_log(url),
+                            "status_code": status_code_for_retry,
+                            "retry_sleep": sleep_time,
+                            "attempt": attempt,
+                        }
                     )
                     await asyncio.sleep(sleep_time)
                     continue
