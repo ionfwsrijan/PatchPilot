@@ -597,13 +597,42 @@ async def _run_single_scan_task(
             logger.exception("Failed to write failed status for job %s", job_id)
 
 
-@app.post("/scan")
+@app.post(
+    "/scan",
+    summary="Scan an uploaded project archive",
+    description=(
+        "Uploads a ZIP archive containing a project, extracts it, "
+        "and starts an asynchronous security scan. "
+        "The endpoint immediately returns a job ID that can be used "
+        "to monitor scan progress and retrieve results."
+    ),
+    response_model=dict,
+    responses={
+        400: {"description": "Invalid ZIP archive or upload error."},
+        413: {"description": "Uploaded file exceeds the maximum allowed size."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
-    project: UploadFile = File(...),
-    project_name: str = Form("project"),
+    project: UploadFile = File(
+        ...,
+        description="ZIP archive containing the project source code to scan.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name assigned to the uploaded project.",
+    ),
 ):
+    """
+    Upload a project archive and start an asynchronous security scan.
+
+    The uploaded ZIP file is extracted into a temporary workspace,
+    validated, and queued for background scanning. The endpoint
+    returns immediately with a unique job ID that can be used to
+    track scan progress and retrieve scan results.
+    """
     content_length = request.headers.get("content-length")
     try:
         content_length = int(content_length) if content_length else None
@@ -655,13 +684,46 @@ async def scan(
     )
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
-@app.post("/scan-url")
+
+@app.post(
+    "/scan-url",
+    summary="Scan a GitHub repository",
+    description=(
+        "Downloads a GitHub repository as a ZIP archive using the "
+        "specified repository URL and branch, then starts an "
+        "asynchronous security scan. Returns a job ID for tracking "
+        "the scan progress and results."
+    ),
+    responses={
+        400: {"description": "Invalid repository URL or repository download failed."},
+        404: {"description": "Repository or branch not found."},
+        429: {"description": "GitHub API rate limit exceeded."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def scan_url(
     background_tasks: BackgroundTasks,
-    repo_url: str = Form(...),
-    ref: str = Form("main"),
-    project_name: str = Form("project"),
+    repo_url: str = Form(
+        ...,
+        description="Public GitHub repository URL to scan.",
+    ),
+    ref: str = Form(
+        "main",
+        description="Git branch to download and scan.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name assigned to this scan.",
+    ),
 ):
+    """
+    Download a GitHub repository and start an asynchronous security scan.
+
+    The repository is downloaded as a ZIP archive, extracted into a
+    temporary workspace, and queued for background scanning. A job ID
+    is returned immediately for tracking scan progress and retrieving
+    results.
+    """
     if not validate_git_ref(repo_url, ref):
         raise HTTPException(
             status_code=400,
@@ -764,8 +826,30 @@ async def _record_fixes_to_db(job_id: str, fixes: List[Fix]):
         logger.exception("Failed to record fixes to DB for job %s", job_id)
 
 
-@app.post("/fix", response_model=FixResponse)
+@app.post(
+    "/fix",
+    response_model=FixResponse,
+    summary="Generate remediation suggestions",
+    description=(
+        "Generates automated fix suggestions for one or more selected "
+        "security findings within a previously scanned project. "
+        "The generated fixes are returned to the client and recorded "
+        "asynchronously for reporting purposes."
+    ),
+    responses={
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request payload."},
+        500: {"description": "Internal server error."},
+    },
+)
 def fix(req: FixRequest, background_tasks: BackgroundTasks):
+    """
+    Generate remediation suggestions for selected findings.
+
+    Uses the specified job ID and finding IDs to produce proposed
+    fixes for detected security issues. Generated fixes are returned
+    immediately and stored asynchronously for later reporting.
+    """
     job_dir = WORK_ROOT / req.job_id
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
@@ -797,11 +881,42 @@ async def get_baseline_findings(job_id: str):
         await db.close()
 
 
-@app.post("/verify", response_model=VerifyResponse)
+@app.post(
+    "/verify",
+    response_model=VerifyResponse,
+    summary="Verify repository fixes",
+    description=(
+        "Verifies whether the applied fixes successfully resolve the "
+        "detected security issues. The repository is rescanned and "
+        "compared against the baseline scan to identify any newly "
+        "introduced issues."
+    ),
+    responses={
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request parameters."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def verify(
-    job_id: str = Form(...),
-    baseline_job_id: str | None = Form(None),
+    job_id: str = Form(
+        ...,
+        description="Identifier of the scan job to verify.",
+    ),
+    baseline_job_id: str | None = Form(
+        None,
+        description=(
+            "Optional baseline scan job ID used for comparison. "
+            "If omitted, the current job is used as the baseline."
+        ),
+    ),
 ):
+    """
+    Verify that applied fixes resolve previously detected security issues.
+
+    The repository is rescanned and compared with a baseline scan to
+    determine whether fixes were successful and whether any new
+    vulnerabilities were introduced.
+    """
     job_dir = WORK_ROOT / job_id
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
@@ -867,12 +982,43 @@ async def verify(
     return result
 
 
-@app.post("/evidence-pack")
+@app.post(
+    "/evidence-pack",
+    summary="Generate an evidence package",
+    description=(
+        "Generates a downloadable evidence package containing scan "
+        "artifacts, reports, and supporting files for a completed "
+        "security scan. Optionally refreshes the raw scan outputs "
+        "before creating the evidence package."
+    ),
+    responses={
+        200: {"description": "Evidence package generated successfully."},
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request parameters."},
+        500: {"description": "Internal server error."},
+    },
+)
 def evidence_pack(
-    job_id: str = Form(...),
-    project_name: str = Form("project"),
-    update_raw: bool = Form(False),
+    job_id: str = Form(
+        ...,
+        description="Identifier of the scan job for which the evidence package should be generated.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name of the project included in the generated reports.",
+    ),
+    update_raw: bool = Form(
+        False,
+        description="If true, refreshes the raw scan results before generating the evidence package.",
+    ),
 ):
+    """
+    Generate a downloadable evidence package for a completed scan.
+
+    The evidence package includes reports, raw scanner outputs, and
+    supporting artifacts that can be used for auditing, compliance,
+    or sharing scan results.
+    """
     job_dir = WORK_ROOT / job_id
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
