@@ -78,12 +78,8 @@ from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
 
 
 def validate_git_ref(repo_url: str, ref: str) -> bool:
-    try:
-        # Use ls-remote to check if ref exists in the remote repo
-        subprocess.check_output(["git", "ls-remote", repo_url, ref])
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    output = subprocess.check_output(["git", "ls-remote", repo_url, ref])
+    return bool(output.strip())
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
