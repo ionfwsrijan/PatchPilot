@@ -473,7 +473,12 @@ export function Findings() {
                 {selectedFindings.size !== 1 ? "s" : ""} selected
               </span>
               <div className="flex gap-2">
-                <Link to="/fix">
+                <Link
+                  to="/fix"
+                  state={{
+                    findingIds: [...selectedFindings],
+                  }}
+                >
                   <Button size="sm">Propose Fixes</Button>
                 </Link>
                 <Button variant="outline" size="sm" disabled>

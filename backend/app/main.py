@@ -743,6 +743,7 @@ async def scan_url(
     is returned immediately for tracking scan progress and retrieving
     results.
     """
+    
     parse_github_repo_url(repo_url)  # raises 400 early on a non-GitHub URL
 
     if not REF_PATTERN.match(ref):
