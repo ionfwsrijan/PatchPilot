@@ -757,7 +757,7 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
-    
+
     repo_dir = _maybe_use_single_top_folder(repo_dir)
     fixes = propose_fixes(repo_dir, req.finding_ids)
     # Predict and assign confidence, then sort

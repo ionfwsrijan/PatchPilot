@@ -38,8 +38,15 @@ class TestFixPredictor(unittest.TestCase):
         mock_load.return_value = mock_model
 
         fixes = [
-            Fix(finding_id="low_conf", status="suggested", summary="Fix low", diff="abc"),
-            Fix(finding_id="high_conf", status="suggested", summary="Fix high", diff="xyz\n123"),
+            Fix(
+                finding_id="low_conf", status="suggested", summary="Fix low", diff="abc"
+            ),
+            Fix(
+                finding_id="high_conf",
+                status="suggested",
+                summary="Fix high",
+                diff="xyz\n123",
+            ),
         ]
 
         with patch("app.ml.fix_predictor.FIX_PREDICTOR_MODEL", mock_model):
