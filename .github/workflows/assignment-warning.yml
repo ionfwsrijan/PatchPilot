@@ -1,0 +1,75 @@
+name: Assignment Warning
+
+on:
+  issues:
+    types:
+      - assigned
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  assignment-warning:
+    if: ${{ github.event.assignee.type != 'Bot' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check contributor assignments
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const assignee = context.payload.assignee.login;
+            const currentIssue = context.payload.issue.number;
+
+            // Fetch all open issues assigned to this contributor
+            const issues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: "open",
+                assignee,
+                per_page: 100,
+              }
+            );
+
+            // Ignore pull requests
+            const assignedIssues = issues.filter(issue => !issue.pull_request);
+
+            // Only warn if contributor has 2 or more assigned issues
+            if (assignedIssues.length >= 2) {
+
+              const issueList = assignedIssues
+                .map(issue => `- #${issue.number} — ${issue.title}`)
+                .join("\n");
+
+              const body = [
+                "⚠️ **Assignment Notice**",
+                "",
+                `Hi @${assignee}! 👋`,
+                "",
+                `It looks like you currently have **${assignedIssues.length} open assigned issues**.`,
+                "",
+                "To ensure fair distribution of work and timely progress, we encourage contributors to complete or unassign their existing issues before taking on additional ones.",
+                "",
+                "### 📋 Current Assigned Issues",
+                "",
+                issueList,
+                "",
+                "If you're actively working on them, feel free to continue. Otherwise, please consider freeing up an issue for other contributors.",
+                "",
+                "> **Note:** This is only a friendly reminder. Your assignment has **not** been removed.",
+                "",
+                "Thank you for contributing to **PatchPilot**! 🚀"
+              ].join("\n");
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: currentIssue,
+                body
+              });
+            }

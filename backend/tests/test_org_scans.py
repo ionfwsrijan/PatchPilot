@@ -1,5 +1,8 @@
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -136,6 +139,51 @@ def test_stream_org_status(mock_get_db, client):
     assert "r1" in response.text
 
 
+@pytest.mark.anyio
+async def test_org_repo_scan_keeps_api_responsive_during_blocking_scan(tmp_path):
+    from app import main
+
+    def blocking_scan(*args, **kwargs):
+        time.sleep(0.3)
+        return [], [], [], [], []
+
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchone.return_value = {"status": "scanning"}
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = mock_cursor
+
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("app.main.get_db", AsyncMock(return_value=mock_db)),
+        patch("app.main.download_to_path", new_callable=AsyncMock),
+        patch("app.main.unzip_to_dir"),
+        patch("app.main._scan_repo_dir", side_effect=blocking_scan),
+        patch("app.main._extract_dependencies", return_value=[]),
+        patch("app.main._apply_fp_predictor", new_callable=AsyncMock),
+    ):
+        scan_task = asyncio.create_task(
+            main._run_repo_scan_task(
+                asyncio.Semaphore(1),
+                "job-1",
+                "https://github.com/acme/repo",
+                "main",
+                "repo",
+                "org-1",
+            )
+        )
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            started_at = time.perf_counter()
+            response = await c.get("/health")
+            elapsed = time.perf_counter() - started_at
+
+        await scan_task
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+
+
 @patch("app.main.get_db", new_callable=AsyncMock)
 def test_get_org_summary(mock_get_db, client):
     mock_db = AsyncMock()
@@ -259,3 +307,24 @@ def test_extract_dependencies(tmp_path):
     assert ("vite", "4.0.0") in deps
     assert ("fastapi", "0.95.0") in deps
     assert ("pydantic", "1.10") in deps
+
+
+@pytest.mark.anyio
+@patch("app.main.httpx.AsyncClient.get")
+async def test_fetch_org_repos_timeout(mock_get):
+    """
+    Test that an httpx.TimeoutException gracefully degrades into a
+    504 Gateway Timeout instead of hanging the worker thread indefinitely.
+    """
+    import httpx
+    from fastapi import HTTPException
+
+    from app.main import fetch_org_repos
+
+    mock_get.side_effect = httpx.TimeoutException("Connection timed out")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await fetch_org_repos("test-org")
+
+    assert exc_info.value.status_code == 504
+    assert "GitHub API request failed or timed out" in exc_info.value.detail

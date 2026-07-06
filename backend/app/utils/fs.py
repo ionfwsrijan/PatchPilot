@@ -6,6 +6,8 @@ import shutil
 import zipfile
 from pathlib import Path
 
+JOB_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
 
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -15,8 +17,30 @@ def safe_rmtree(p: Path) -> None:
     shutil.rmtree(p, ignore_errors=True)
 
 
+def safe_job_dir(work_root: Path, job_id: str) -> Path:
+    """Validate job_id and return safe job directory path."""
+    if not JOB_ID_PATTERN.match(job_id):
+        raise ValueError(f"Invalid job_id: {job_id}")
+
+    resolved = (work_root / job_id).resolve()
+    work_root_resolved = work_root.resolve()
+
+    if not resolved.is_relative_to(work_root_resolved):
+        raise ValueError(f"Path traversal detected for job_id: {job_id}")
+
+    return resolved
+
+
 def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
+    out_path = out_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as z:
+        for member_name in z.namelist():
+            member_path = (out_path / member_name).resolve()
+            if out_path not in member_path.parents and member_path != out_path:
+                raise ValueError(
+                    f"Zip Slip blocked: malicious file path detected '{member_name}'"
+                )
+
         z.extractall(out_dir)
 
     children = list(out_dir.iterdir())

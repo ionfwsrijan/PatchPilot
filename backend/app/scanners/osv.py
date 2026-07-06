@@ -23,7 +23,7 @@ def map_cvss_to_severity(score):
     return "INFO"
 
 
-def run_osv_scanner(repo_dir: Path) -> List[Finding]:
+def run_osv_scanner(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
     """
     Runs osv-scanner in repo_dir and returns ONLY real vulnerability findings.
 
@@ -43,6 +43,11 @@ def run_osv_scanner(repo_dir: Path) -> List[Finding]:
     print("OSV returncode:", r.get("returncode"))
     print("OSV stdout head:", (r.get("stdout") or "")[:200])
     print("OSV stderr head:", (r.get("stderr") or "")[:500])
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(r.get("stdout", ""), encoding="utf-8")
 
     stdout = r.get("stdout") or ""
     stderr = r.get("stderr") or ""

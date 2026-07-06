@@ -16,6 +16,12 @@ class Reachability(BaseModel):
     evidence: Optional[str] = None
 
 
+class FindingStatusUpdate(BaseModel):
+    status: str = Field(
+        ..., description="The new status: 'open', 'accepted', or 'ignored'"
+    )
+
+
 class Finding(BaseModel):
     id: str
     category: str
@@ -44,6 +50,7 @@ class Fix(BaseModel):
     files_changed: List[str] = Field(default_factory=list)
     diff: Optional[str] = None
     notes: List[str] = Field(default_factory=list)
+    fix_confidence: Optional[float] = None
 
 
 class FixRequest(BaseModel):
