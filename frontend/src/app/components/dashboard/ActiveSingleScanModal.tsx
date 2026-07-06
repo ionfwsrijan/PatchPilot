@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "../ui/utils";
 
@@ -6,7 +7,7 @@ interface ActiveSingleScanModalProps {
   scanState: any;
 }
 
-export function ActiveSingleScanModal({ scanId, scanState }: ActiveSingleScanModalProps) {
+export const ActiveSingleScanModal = memo(function ActiveSingleScanModal({ scanId, scanState }: ActiveSingleScanModalProps) {
   if (!scanId || !scanState) return null;
 
   return (
@@ -82,4 +83,4 @@ export function ActiveSingleScanModal({ scanId, scanState }: ActiveSingleScanMod
       </div>
     </div>
   );
-}
+});

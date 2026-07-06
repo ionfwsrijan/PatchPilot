@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Loader2, Layers, CheckCircle, AlertTriangle } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
@@ -10,7 +11,7 @@ interface ActiveOrgScanModalProps {
   onClose: () => void;
 }
 
-export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, onAbort, onClose }: ActiveOrgScanModalProps) {
+export const ActiveOrgScanModal = memo(function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, onAbort, onClose }: ActiveOrgScanModalProps) {
   if (!statusData) return null;
 
   return (
@@ -104,4 +105,4 @@ export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, 
       </div>
     </div>
   );
-}
+});
