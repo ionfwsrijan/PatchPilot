@@ -7,18 +7,24 @@ def get_model():
     return None
 
 
+# Import embedder in a way that keeps the module importable during tests.
+# Tests may patch SENTENCE_TRANSFORMERS_AVAILABLE and/or embed functions.
 try:
-    from app.ml.embedder import embed_findings
+    from app.ml.embedder import embed_findings as _embed_findings
+except Exception:  # pragma: no cover
+    _embed_findings = None
 
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except Exception:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+SENTENCE_TRANSFORMERS_AVAILABLE = _embed_findings is not None
 
-    def embed_findings(findings):
+
+def embed_findings(findings):
+    """Wrapper so tests can patch deduplicator.embed_findings if needed."""
+    if _embed_findings is None:
         raise RuntimeError(
             "sentence-transformers is not installed. "
             "Install it using: pip install sentence-transformers"
         )
+    return _embed_findings(findings)
 
 
 def deduplicate(
