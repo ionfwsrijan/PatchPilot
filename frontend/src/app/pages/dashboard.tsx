@@ -57,7 +57,15 @@ export function Dashboard() {
           <CardDescription>Upload a ZIP archive or import from a repository URL</CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Visually hidden label for screen readers */}
+          <label
+            htmlFor="zip-file-upload"
+            className="sr-only"
+          >
+            Upload ZIP Archive
+          </label>
           <input
+            id="zip-file-upload"
             ref={fileInputRef}
             type="file"
             accept=".zip"
