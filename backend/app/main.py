@@ -1401,13 +1401,13 @@ async def _run_repo_scan_task(
             except ValueError:
                 epsilon = 0.15
 
+            # CORRECT WAY:
             if not disable_dedup and SENTENCE_TRANSFORMERS_AVAILABLE:
-         # Runtime safety verification assertion guard
-             assert all(isinstance(f, Finding) for f in findings), \
-                
-             f"Expected Finding objects, got {set(type(f).__name__ for f in findings)}"
+    # The assertion must be safely inside the block body
+              assert all(isinstance(f, Finding) for f in findings), \
+              f"Expected Finding objects, got {set(type(f).__name__ for f in findings)}"
         
-             findings = deduplicate(findings, epsilon)
+            findings = deduplicate(findings, epsilon)
 
             await _apply_fp_predictor(findings)
 
