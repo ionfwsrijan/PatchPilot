@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { scanZip, scanRepoUrl, API_BASE } from "../lib/api";
+import { scanZip, scanRepoUrl, API_BASE, type SingleScanStatus } from "../lib/api";
 
 export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_name: string; findings?: any[] }) => void) {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);
-  const [singleScanState, setSingleScanState] = useState<any>(null);
+  const [singleScanState, setSingleScanState] = useState<SingleScanStatus | null>(null);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_na
         setActiveSingleScanId(null);
         return;
       }
-      setSingleScanState(parsed);
+      setSingleScanState(parsed as SingleScanStatus);
 
       if (parsed.status === "completed" || parsed.status === "failed") {
         sse.close();
@@ -49,11 +49,11 @@ export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_na
         }, 1000);
       }
     };
-    
+
     sse.onerror = () => {
       if (sse.readyState === EventSource.CLOSED) setScanLoading(false);
     };
-    
+
     setEventSource(sse);
   }, [eventSource, onScanSuccess]);
 

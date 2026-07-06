@@ -372,3 +372,18 @@ export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
   }
   return res.json();
 }
+// SSE Response Types
+export type SingleScanStatus = {
+  sast: "pending" | "in_progress" | "completed";
+  dependency: "pending" | "in_progress" | "completed";
+  secrets: "pending" | "in_progress" | "completed";
+  status: "running" | "completed" | "failed";
+  findings_count?: number;
+};
+
+export type OrgJobStatusResponse = {
+  org_job_id: string;
+  org_name?: string;
+  status: "pending" | "scanning" | "completed" | "failed" | "aborted";
+  repos: RepoStatus[];
+};

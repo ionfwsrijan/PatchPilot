@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { scanOrganization, getOrgJobStatus, abortOrganizationScan, API_BASE } from "../lib/api";
+import { scanOrganization, getOrgJobStatus, abortOrganizationScan, API_BASE, type OrgJobStatusResponse } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 
 export function useOrganizationScan() {
@@ -7,7 +7,7 @@ export function useOrganizationScan() {
   const [orgScanLoading, setOrgScanLoading] = useState(false);
   const [orgScanError, setOrgScanError] = useState<string | null>(null);
   const [activeOrgJobId, setActiveOrgJobId] = useState<string | null>(null);
-  const [orgStatusData, setOrgStatusData] = useState<any>(null);
+  const [orgStatusData, setOrgStatusData] = useState<OrgJobStatusResponse | null>(null);
   const [expectedRepoCount, setExpectedRepoCount] = useState<number>(0);
   const [isAborting, setIsAborting] = useState(false);
   const [eventSource, setEventSource] = useState<EventSource | null>(null);
@@ -41,7 +41,7 @@ export function useOrganizationScan() {
       getOrgJobStatus(data.org_job_id).then(setOrgStatusData).catch(() => {});
 
       const sse = new EventSource(`${API_BASE}/api/scans/org/${data.org_job_id}/stream`);
-      
+
       sse.onmessage = (event) => {
         const parsed = JSON.parse(event.data);
         if (parsed.error) {
@@ -49,10 +49,10 @@ export function useOrganizationScan() {
           setOrgScanLoading(false);
           return;
         }
-        
-        setOrgStatusData(parsed);
-        const isFullyFinished = 
-          ["completed", "failed"].includes(parsed.status) || 
+
+        setOrgStatusData(parsed as OrgJobStatusResponse);
+        const isFullyFinished =
+          ["completed", "failed"].includes(parsed.status) ||
           (parsed.status === "aborted" && !parsed.repos.some((r: any) => r.status === "scanning" || r.status === "pending"));
 
         if (isFullyFinished) {
@@ -74,7 +74,7 @@ export function useOrganizationScan() {
 
   const handleAbortScan = async (mode: "pending" | "force") => {
     if (!activeOrgJobId) return;
-    
+
     if (mode === "force") {
       if (eventSource) {
         eventSource.close();
@@ -86,7 +86,7 @@ export function useOrganizationScan() {
     } else {
       setIsAborting(true);
     }
-    
+
     try {
       await abortOrganizationScan(activeOrgJobId, mode);
     } catch (err) {
