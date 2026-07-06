@@ -233,6 +233,14 @@ def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
 
 ACTIVE_SCANS = {}
 ORG_CANCEL_EVENTS = {}
+JOB_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def get_job_lock(job_id: str) -> asyncio.Lock:
+    """Get or create a lock for a specific job to prevent race conditions."""
+    if job_id not in JOB_LOCKS:
+        JOB_LOCKS[job_id] = asyncio.Lock()
+    return JOB_LOCKS[job_id]
 
 
 def _scan_repo_dir(
@@ -745,12 +753,16 @@ async def scan_url(
 
 @app.get("/api/scans/{job_id}/stream")
 async def stream_single_scan_status(job_id: str):
+    job_lock = get_job_lock(job_id)
+    
     async def event_generator():
         while True:
-            if job_id not in ACTIVE_SCANS:
-                yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
-                break
-            state = ACTIVE_SCANS[job_id]
+            async with job_lock:
+                if job_id not in ACTIVE_SCANS:
+                    yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+                    break
+                state = ACTIVE_SCANS[job_id]
+            # Release lock before yielding to allow concurrent updates
             yield f"data: {json.dumps(state)}\n\n"
             if state["status"] in ["completed", "failed"]:
                 break
@@ -1235,21 +1247,34 @@ async def get_verify(job_id: str):
 
 @app.delete("/jobs/{job_id}")
 async def delete_job_endpoint(job_id: str):
-    try:
-        job_dir = safe_job_dir(WORK_ROOT, job_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    # Reject deletion if job is currently being scanned
+    if job_id in ACTIVE_SCANS:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a job that is currently being scanned"
+        )
 
-    if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="Job not found")
+    job_lock = get_job_lock(job_id)
+    async with job_lock:
+        try:
+            job_dir = safe_job_dir(WORK_ROOT, job_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    safe_rmtree(job_dir)
+        if not job_dir.exists():
+            raise HTTPException(status_code=404, detail="Job not found")
 
-    db = await get_db()
-    try:
-        await delete_job(db, job_id)
-    finally:
-        await db.close()
+        safe_rmtree(job_dir)
+
+        db = await get_db()
+        try:
+            await delete_job(db, job_id)
+        finally:
+            await db.close()
+
+        # Clean up job lock
+        if job_id in JOB_LOCKS:
+            del JOB_LOCKS[job_id]
 
     return {"deleted": True}
 
