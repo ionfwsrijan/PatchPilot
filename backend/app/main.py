@@ -68,6 +68,7 @@ from .models import (
 from .remediation.engine import propose_fixes
 from .reports.evidence_pack import build_evidence_pack
 from .reports.pdf_builder import generate_audit_pdf, generate_org_audit_pdf
+from .reports.sarif import generate_sarif_report
 from .sandbox.verify import verify_repo
 from .scanners.entropy import run_entropy
 from .scanners.gitleaks import run_gitleaks
@@ -1105,6 +1106,61 @@ async def download_audit_pdf(job_id: str):
     )
 
 
+@app.get("/api/scans/{job_id}/report/sarif", tags=["Reports"])
+async def download_audit_sarif(job_id: str):
+    """Generate and download SARIF report for a scan job.
+
+    SARIF (Static Analysis Results Interchange Format) is compatible with:
+    - GitHub Advanced Security
+    - SonarQube
+    - DefectDojo
+    """
+    db = await get_db()
+    try:
+        job_row = await get_job(db, job_id)
+        if job_row is None:
+            raise HTTPException(
+                status_code=404, detail=f"No job found with id '{job_id}'"
+            )
+
+        project_name = job_row["project_name"]
+        rows = await get_findings_by_job_id(db, job_id)
+    finally:
+        await db.close()
+
+    findings_list = []
+    for row in rows:
+        loc = None
+        if row["file_path"]:
+            loc = Location(path=row["file_path"], start_line=row["line_number"])
+
+        findings_list.append(
+            Finding(
+                id=row["id"],
+                title=row.get("title") or row.get("rule_id") or "Unknown",
+                severity=row.get("severity") or "INFO",
+                category=row.get("category") or "Unknown",
+                location=loc,
+                description=row.get("message") or "",
+                metadata=row.get("metadata") or {},
+            )
+        )
+
+    sarif_report = generate_sarif_report(
+        findings=findings_list,
+        project_name=project_name,
+        run_id=job_id,
+    )
+
+    return Response(
+        content=json.dumps(sarif_report, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f"attachment; filename=PatchPilot-Audit-{job_id}.sarif"
+        },
+    )
+
+
 @app.get("/jobs/{job_id}/findings")
 async def get_findings(job_id: str):
     db = await get_db()
@@ -1922,6 +1978,88 @@ async def download_org_audit_pdf(org_job_id: str):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/api/scans/org/{org_job_id}/report/sarif", tags=["Reports"])
+async def download_org_audit_sarif(org_job_id: str):
+    """Generate and download SARIF report for an organization scan job.
+
+    SARIF (Static Analysis Results Interchange Format) is compatible with:
+    - GitHub Advanced Security
+    - SonarQube
+    - DefectDojo
+    """
+    db = await get_db()
+    try:
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            "SELECT org_name FROM org_jobs WHERE id = ?", (org_job_id,)
+        )
+        org_row = await cur.fetchone()
+        if not org_row:
+            raise HTTPException(status_code=404, detail="Organization job not found")
+        org_name = org_row["org_name"]
+
+        cur = await db.execute(
+            """
+            SELECT
+                f.id,
+                j.project_name as repo_name,
+                f.rule_id as title,
+                f.message as description,
+                f.severity,
+                f.file_path,
+                f.line_number,
+                f.category
+            FROM findings f
+            JOIN jobs j ON f.job_id = j.job_id
+            WHERE j.org_job_id = ?
+            ORDER BY
+                CASE f.severity
+                    WHEN 'CRITICAL' THEN 1
+                    WHEN 'HIGH' THEN 2
+                    WHEN 'MEDIUM' THEN 3
+                    WHEN 'LOW' THEN 4
+                    ELSE 5
+                END
+            """,
+            (org_job_id,),
+        )
+        findings_rows = await cur.fetchall()
+
+        findings_list = []
+        for row in findings_rows:
+            loc = None
+            if row["file_path"]:
+                loc = Location(path=row["file_path"], start_line=row["line_number"])
+
+            findings_list.append(
+                Finding(
+                    id=row["id"],
+                    title=row["title"] or "Unknown",
+                    severity=row["severity"] or "INFO",
+                    category=row.get("category") or "Unknown",
+                    location=loc,
+                    description=row.get("description") or "",
+                )
+            )
+
+        sarif_report = generate_sarif_report(
+            findings=findings_list,
+            project_name=org_name,
+            run_id=org_job_id,
+        )
+
+        return Response(
+            content=json.dumps(sarif_report, indent=2),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename=PatchPilot-Org-{org_name}-{org_job_id}.sarif"
+            },
+        )
+    finally:
+        await db.close()
 
 
 @app.get("/api/scans/org/{org_job_id}/blast-radius", tags=["Organization"])
