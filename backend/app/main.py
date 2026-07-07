@@ -50,6 +50,7 @@ from .db import (
     upsert_contributor_stat,
 )
 from .ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+from .ml.fix_predictor import predict_confidence
 from .ml.fp_predictor import predictor
 from .ml.ranker import load_ranker, scoring_function
 from .models import (
