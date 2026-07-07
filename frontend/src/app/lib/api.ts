@@ -2,6 +2,18 @@ export const API_BASE =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ||
   "http://localhost:8000";
 
+// 1. Pull the token from Vite's env variables
+export const API_KEY = import.meta.env.VITE_PATCHPILOT_API_KEY || "";
+
+// 2. Utility to cleanly inject the Authorization header
+function getAuthHeaders(customHeaders: Record<string, string> = {}): Record<string, string> {
+  const headers = { ...customHeaders };
+  if (API_KEY) {
+    headers["Authorization"] = `Bearer ${API_KEY}`;
+  }
+  return headers;
+}
+
 export type HealthResponse = {
   ok: boolean;
   status: "healthy" | "degraded";
@@ -9,7 +21,7 @@ export type HealthResponse = {
 };
 
 export async function getHealth() {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await fetch(`${API_BASE}/health`, { headers: getAuthHeaders() });
 
   if (!res.ok) {
     throw new Error(await res.text());
@@ -45,11 +57,11 @@ export type BackendFinding = {
   };
 
   reachability?: {
-  reachable?: boolean;
-  reason?: string;
-};
+    reachable?: boolean;
+    reason?: string;
+  };
 
-features?: Record<string, unknown>;
+  features?: Record<string, unknown>;
   confidence?: number;
   code?: string;
   suggested_fix?: string;
@@ -72,6 +84,7 @@ export async function scanZip(file: File, projectName = "project") {
 
   const res = await fetch(`${API_BASE}/scan`, {
     method: "POST",
+    headers: getAuthHeaders(),
     body: form,
   });
 
@@ -91,6 +104,7 @@ export async function scanRepoUrl(
 
   const res = await fetch(`${API_BASE}/scan-url`, {
     method: "POST",
+    headers: getAuthHeaders(),
     body: form,
   });
 
@@ -101,8 +115,11 @@ export async function scanRepoUrl(
 
   return (await res.json()) as ScanInitResponse;
 }
+
 export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as BackendFinding[];
 }
@@ -115,7 +132,7 @@ export async function labelFinding(
 ) {
   const res = await fetch(`${API_BASE}/findings/${findingId}/label`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ false_positive: falsePositive, expected_version: expectedVersion }),
     signal,
   });
@@ -131,7 +148,7 @@ export async function labelFinding(
 export async function updateFindingStatus(findingId: string, status: "open" | "accepted" | "ignored") {
   const res = await fetch(`${API_BASE}/findings/${findingId}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ status }),
   });
 
@@ -142,7 +159,7 @@ export async function updateFindingStatus(findingId: string, status: "open" | "a
 export async function fix(jobId: string, findingIds: string[]) {
   const res = await fetch(`${API_BASE}/fix`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ job_id: jobId, finding_ids: findingIds }),
   });
 
@@ -154,15 +171,15 @@ export async function verify(jobId: string) {
   const form = new FormData();
   form.append("job_id", jobId);
 
-  const res = await fetch(`${API_BASE}/verify`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE}/verify`, { 
+    method: "POST", 
+    headers: getAuthHeaders(),
+    body: form 
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-/**
- * POST /evidence-pack -> returns a ZIP (FileResponse)
- * This fetches it as a Blob and tries to infer a filename from Content-Disposition.
- */
 export async function downloadEvidencePack(
   jobId: string,
   projectName = "project",
@@ -173,6 +190,7 @@ export async function downloadEvidencePack(
 
   const res = await fetch(`${API_BASE}/evidence-pack`, {
     method: "POST",
+    headers: getAuthHeaders(),
     body: form,
   });
 
@@ -181,7 +199,6 @@ export async function downloadEvidencePack(
   }
 
   const blob = await res.blob();
-
   const cd = res.headers.get("content-disposition") || "";
   const match = cd.match(/filename="?([^"]+)"?/i);
   const filename = match?.[1] || `evidence-pack-${jobId}.zip`;
@@ -195,7 +212,9 @@ export type TrendData = {
 };
 
 export async function getTrends(limit = 6) {
-  const res = await fetch(`${API_BASE}/trends?limit=${limit}`);
+  const res = await fetch(`${API_BASE}/trends?limit=${limit}`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as TrendData[];
 }
@@ -206,7 +225,9 @@ export type CweData = {
 };
 
 export async function getCweDistribution() {
-  const res = await fetch(`${API_BASE}/cwe-distribution`);
+  const res = await fetch(`${API_BASE}/cwe-distribution`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as CweData[];
 }
@@ -227,7 +248,9 @@ export interface DependencyDiffResult {
 }
 
 export const getDependencyDiff = async (): Promise<DependencyDiffResult> => {
-  const response = await fetch(`${API_BASE}/dependency-diff`);
+  const response = await fetch(`${API_BASE}/dependency-diff`, {
+    headers: getAuthHeaders(),
+  });
   if (!response.ok) {
     throw new Error("Failed to fetch dependency diff");
   }
@@ -251,7 +274,9 @@ export interface LeaderboardUpdateRequest {
 }
 
 export async function getLeaderboard(): Promise<ContributorStat[]> {
-  const res = await fetch(`${API_BASE}/leaderboard`);
+  const res = await fetch(`${API_BASE}/leaderboard`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -259,7 +284,7 @@ export async function getLeaderboard(): Promise<ContributorStat[]> {
 export async function updateLeaderboard(data: LeaderboardUpdateRequest) {
   const res = await fetch(`${API_BASE}/leaderboard/update`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -267,7 +292,9 @@ export async function updateLeaderboard(data: LeaderboardUpdateRequest) {
 }
 
 export async function downloadAuditReport(jobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/${jobId}/report/pdf`);
+  const res = await fetch(`${API_BASE}/api/scans/${jobId}/report/pdf`, {
+    headers: getAuthHeaders(),
+  });
   
   if (!res.ok) {
     throw new Error(await res.text());
@@ -292,7 +319,7 @@ export type OrgJobStatusResponse = {
 export async function scanOrganization(orgUrl: string) {
   const res = await fetch(`${API_BASE}/api/scans/org`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: getAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ org_url: orgUrl }),
   });
 
@@ -304,7 +331,9 @@ export async function scanOrganization(orgUrl: string) {
 }
 
 export async function getOrgJobStatus(orgJobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/status`);
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/status`, {
+    headers: getAuthHeaders(),
+  });
 
   if (!res.ok) {
     throw new Error(await res.text());
@@ -316,32 +345,38 @@ export async function getOrgJobStatus(orgJobId: string) {
 export const abortOrganizationScan = async (orgJobId: string, mode: "pending" | "force" = "pending") => {
   const response = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/abort?mode=${mode}`, {
     method: "POST",
+    headers: getAuthHeaders(),
   });
   if (!response.ok) throw new Error("Failed to abort scan");
   return response.json();
 };
 
 export async function getOrgSummary(orgJobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/summary`);
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/summary`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to fetch organization summary");
   return res.json();
 }
 
 export async function getOrgFindings(orgJobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/findings`);
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/findings`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to fetch organization findings");
   return res.json();
 }
 
 export async function downloadOrgAuditReport(orgJobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/report/pdf`);
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/report/pdf`, {
+    headers: getAuthHeaders(),
+  });
   
   if (!res.ok) {
     throw new Error(await res.text());
   }
 
   const blob = await res.blob();
-  
   const cd = res.headers.get("content-disposition") || "";
   const match = cd.match(/filename="?([^"]+)"?/i);
   const filename = match?.[1] || `PatchPilot-Org-Audit-${orgJobId}.pdf`;
@@ -351,7 +386,9 @@ export async function downloadOrgAuditReport(orgJobId: string) {
 
 export const getOrgBlastRadius = async (orgJobId: string) => {
   const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-  const response = await fetch(`${baseUrl}/api/scans/org/${orgJobId}/blast-radius`);
+  const response = await fetch(`${baseUrl}/api/scans/org/${orgJobId}/blast-radius`, {
+    headers: getAuthHeaders(),
+  });
   
   if (!response.ok) {
     throw new Error('Failed to fetch blast radius data');
@@ -366,7 +403,9 @@ export interface OllamaHealthResponse {
 }
 
 export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
-  const res = await fetch(`${API_BASE}/api/health/ollama`);
+  const res = await fetch(`${API_BASE}/api/health/ollama`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     throw new Error(await res.text());
   }

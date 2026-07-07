@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import asynccontextmanager
 
 import asyncio
 import functools
@@ -6,6 +7,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import re
 import shutil
 import tempfile
@@ -19,16 +21,19 @@ import aiosqlite
 import httpx
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     Form,
     HTTPException,
     Query,
     Request,
+    Security,
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -76,7 +81,9 @@ from .scanners.semgrep import run_semgrep
 from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
-RANKER = load_ranker()
+
+# 1. Initialize RANKER as a global placeholder variable
+RANKER = None
 
 try:
     MAX_UPLOAD_MB = int(_MAX_UPLOAD_MB_RAW) if _MAX_UPLOAD_MB_RAW else 100
@@ -87,7 +94,53 @@ MAX_UPLOAD_MB = max(1, MAX_UPLOAD_MB)
 MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="PatchPilot API", version="0.1.0")
+
+# 2. Define the modern Lifespan Context Manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global RANKER
+    logger.info("Initializing database...")
+    await init_db()
+    
+    logger.info("Loading ML ranker model into memory...")
+    RANKER = load_ranker()
+    
+    yield  # The server runs and processes requests while here
+    
+    # Clean up resources on shutdown
+    logger.info("Shutting down application. Clearing ML models from memory...")
+    RANKER = None
+
+# 3. Initialize FastAPI and attach the lifespan manager
+app = FastAPI(title="PatchPilot API", version="0.1.0", lifespan=lifespan)
+
+security_scheme = HTTPBearer()
+
+API_KEY = os.environ.get("PATCHPILOT_API_KEY", "")
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Security(security_scheme),
+):
+    """
+    Validates incoming Bearer token.
+    """
+
+    if not API_KEY:
+        logger.warning(
+            "PATCHPILOT_API_KEY environment variable is not configured."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error: Security layer not initialized.",
+        )
+
+    if credentials.credentials != API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Invalid API token.",
+        )
+
+    return credentials.credentials
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -119,12 +172,6 @@ WORK_ROOT = Path(
     os.environ.get("PATCHPILOT_WORKDIR", Path(tempfile.gettempdir()) / "patchpilot")
 )
 ensure_dir(WORK_ROOT)
-
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
-
 
 @app.get("/health")
 def health():
@@ -639,7 +686,7 @@ async def scan(
             detail=f"Header indicates file is too large. Maximum upload size is {MAX_UPLOAD_MB}MB.",
         )
 
-    job_id = next(tempfile._get_candidate_names())
+    job_id = secrets.token_urlsafe(16)
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
     archive_path = job_dir / project.filename
@@ -718,7 +765,7 @@ async def scan_url(
     is returned immediately for tracking scan progress and retrieving
     results.
     """
-    job_id = next(tempfile._get_candidate_names())
+    job_id = secrets.token_urlsafe(16)
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
     archive_path = job_dir / "repo.zip"
@@ -744,7 +791,10 @@ async def scan_url(
 
 
 @app.get("/api/scans/{job_id}/stream")
-async def stream_single_scan_status(job_id: str):
+async def stream_single_scan_status(
+    job_id: str,
+    token: str = Depends(verify_api_key),
+):
     async def event_generator():
         while True:
             if job_id not in ACTIVE_SCANS:
@@ -1013,6 +1063,7 @@ def evidence_pack(
         False,
         description="If true, refreshes the raw scan results before generating the evidence package.",
     ),
+    token: str = Depends(verify_api_key),
 ):
     """
     Generate a downloadable evidence package for a completed scan.
@@ -1106,7 +1157,10 @@ async def download_audit_pdf(job_id: str):
 
 
 @app.get("/jobs/{job_id}/findings")
-async def get_findings(job_id: str):
+async def get_findings(
+    job_id: str,
+    token: str = Depends(verify_api_key),
+):
     db = await get_db()
     try:
         job_row = await get_job(db, job_id)
@@ -1234,7 +1288,10 @@ async def get_verify(job_id: str):
 
 
 @app.delete("/jobs/{job_id}")
-async def delete_job_endpoint(job_id: str):
+async def delete_job_endpoint(
+    job_id: str,
+    token: str = Depends(verify_api_key),
+):
     try:
         job_dir = safe_job_dir(WORK_ROOT, job_id)
     except ValueError as e:
@@ -1509,7 +1566,7 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
         repo_url = r["html_url"]
         ref = r["default_branch"]
         project_name = r["name"]
-        job_id = next(tempfile._get_candidate_names())
+        job_id = secrets.token_urlsafe(16)
 
         db = await get_db()
         try:
