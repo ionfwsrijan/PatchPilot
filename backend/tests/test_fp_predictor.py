@@ -10,11 +10,12 @@ Covers:
 - Happy-path: all findings receive updated ml_score values.
 """
 
-import asyncio
+import importlib
 import sys
 import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+
 
 # ---------------------------------------------------------------------------
 # Stub out heavy ML dependencies (torch, transformers) so the tests run in
@@ -27,6 +28,7 @@ def _make_torch_stub() -> types.ModuleType:
     # torch.Tensor — needed by scipy's array_api_compat is_torch_array check
     class _Tensor:
         pass
+
     torch.Tensor = _Tensor  # type: ignore[attr-defined]
 
     # torch.device
@@ -34,8 +36,12 @@ def _make_torch_stub() -> types.ModuleType:
 
     # torch.no_grad — used as a context manager
     class _NoGrad:
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
     torch.no_grad = _NoGrad  # type: ignore[attr-defined]
 
     # torch.cat
@@ -62,8 +68,8 @@ def _make_torch_stub() -> types.ModuleType:
 
 def _make_transformers_stub() -> types.ModuleType:
     transformers = types.ModuleType("transformers")
-    transformers.AutoModel = MagicMock()       # type: ignore[attr-defined]
-    transformers.AutoTokenizer = MagicMock()   # type: ignore[attr-defined]
+    transformers.AutoModel = MagicMock()  # type: ignore[attr-defined]
+    transformers.AutoTokenizer = MagicMock()  # type: ignore[attr-defined]
     sys.modules.setdefault("transformers", transformers)
     return transformers
 
@@ -74,10 +80,10 @@ _make_transformers_stub()
 # Now safe to import app modules.
 from app.ml.fp_predictor import FalsePositivePredictor  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_findings(n: int):
     """Return a list of minimal Finding-like objects with ml_score=1.0."""
@@ -94,12 +100,21 @@ def _make_findings(n: int):
 
 
 def _make_ml_input(n: int) -> list[dict]:
-    return [{"rule_id": f"rule-{i}", "message": f"msg-{i}", "file_path": "", "ml_score": 1.0} for i in range(n)]
+    return [
+        {
+            "rule_id": f"rule-{i}",
+            "message": f"msg-{i}",
+            "file_path": "",
+            "ml_score": 1.0,
+        }
+        for i in range(n)
+    ]
 
 
 # ---------------------------------------------------------------------------
 # FalsePositivePredictor unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestFalsePositivePredictor(unittest.TestCase):
     @patch("app.ml.fp_predictor.os.path.exists")
@@ -210,8 +225,17 @@ def _stub_main_deps() -> None:
         stubs[mod_name] = types.ModuleType(mod_name)
 
     fastapi_mod = stubs["fastapi"]
-    for attr in ("FastAPI", "BackgroundTasks", "File", "Form", "HTTPException",
-                 "Query", "Request", "UploadFile", "Depends"):
+    for attr in (
+        "FastAPI",
+        "BackgroundTasks",
+        "File",
+        "Form",
+        "HTTPException",
+        "Query",
+        "Request",
+        "UploadFile",
+        "Depends",
+    ):
         setattr(fastapi_mod, attr, MagicMock())
 
     fastapi_concurrency = stubs["fastapi.concurrency"]
@@ -250,33 +274,53 @@ def _stub_main_deps() -> None:
     _mod("app.sandbox")
 
     # app.db
-    _mod("app.db",
-         create_findings=MagicMock(), create_job=MagicMock(),
-         delete_job=MagicMock(), get_cwe_distribution=MagicMock(),
-         get_db=MagicMock(), get_dependency_diff=MagicMock(),
-         get_finding=MagicMock(), get_findings_by_job_id=MagicMock(),
-         get_job=MagicMock(), get_leaderboard_stats=MagicMock(),
-         get_trend_data=MagicMock(), init_db=MagicMock(),
-         update_finding_status=MagicMock(), update_job_status=MagicMock(),
-         upsert_contributor_stat=MagicMock())
+    _mod(
+        "app.db",
+        create_findings=MagicMock(),
+        create_job=MagicMock(),
+        delete_job=MagicMock(),
+        get_cwe_distribution=MagicMock(),
+        get_db=MagicMock(),
+        get_dependency_diff=MagicMock(),
+        get_finding=MagicMock(),
+        get_findings_by_job_id=MagicMock(),
+        get_job=MagicMock(),
+        get_leaderboard_stats=MagicMock(),
+        get_trend_data=MagicMock(),
+        init_db=MagicMock(),
+        update_finding_status=MagicMock(),
+        update_job_status=MagicMock(),
+        upsert_contributor_stat=MagicMock(),
+    )
 
     # app.models
-    _mod("app.models",
-         Finding=MagicMock, Location=MagicMock,
-         FindingStatusUpdate=MagicMock, Fix=MagicMock,
-         FixRequest=MagicMock, FixResponse=MagicMock,
-         OrgJobStatusResponse=MagicMock, OrgScanRequest=MagicMock,
-         RepoStatus=MagicMock, ScanResponse=MagicMock,
-         VerifyResponse=MagicMock)
+    _mod(
+        "app.models",
+        Finding=MagicMock,
+        Location=MagicMock,
+        FindingStatusUpdate=MagicMock,
+        Fix=MagicMock,
+        FixRequest=MagicMock,
+        FixResponse=MagicMock,
+        OrgJobStatusResponse=MagicMock,
+        OrgScanRequest=MagicMock,
+        RepoStatus=MagicMock,
+        ScanResponse=MagicMock,
+        VerifyResponse=MagicMock,
+    )
 
     # app.ml.*  — stub BEFORE main.py's relative imports run
-    _mod("app.ml.deduplicator",
-         SENTENCE_TRANSFORMERS_AVAILABLE=False,
-         deduplicate=MagicMock())
+    _mod(
+        "app.ml.deduplicator",
+        SENTENCE_TRANSFORMERS_AVAILABLE=False,
+        deduplicate=MagicMock(),
+    )
     _mod("app.ml.fp_predictor", predictor=MagicMock())
-    _mod("app.ml.ranker",
-         load_ranker=MagicMock(return_value=MagicMock()),
-         scoring_function=MagicMock())
+    _mod(
+        "app.ml.ranker",
+        load_ranker=MagicMock(return_value=MagicMock()),
+        scoring_function=MagicMock(),
+    )
     _mod("app.ml.embedder", embed=MagicMock())
     _mod("app.ml.llm_patcher", patch_finding=MagicMock())
 
@@ -287,9 +331,13 @@ def _stub_main_deps() -> None:
     _mod("app.scanners.semgrep", run_semgrep=MagicMock())
 
     # app.utils.*
-    _mod("app.utils.fs",
-         ensure_dir=MagicMock(), safe_job_dir=MagicMock(),
-         safe_rmtree=MagicMock(), unzip_to_dir=MagicMock())
+    _mod(
+        "app.utils.fs",
+        ensure_dir=MagicMock(),
+        safe_job_dir=MagicMock(),
+        safe_rmtree=MagicMock(),
+        unzip_to_dir=MagicMock(),
+    )
     _mod("app.utils.ml_features", extract_features=MagicMock())
 
     # app.remediation.*
@@ -297,9 +345,11 @@ def _stub_main_deps() -> None:
 
     # app.reports.*
     _mod("app.reports.evidence_pack", build_evidence_pack=MagicMock())
-    _mod("app.reports.pdf_builder",
-         generate_audit_pdf=MagicMock(),
-         generate_org_audit_pdf=MagicMock())
+    _mod(
+        "app.reports.pdf_builder",
+        generate_audit_pdf=MagicMock(),
+        generate_org_audit_pdf=MagicMock(),
+    )
 
     # app.sandbox.*
     _mod("app.sandbox.verify", verify_repo=MagicMock())
@@ -309,8 +359,7 @@ _stub_main_deps()
 
 # Import the function under test directly — avoids executing the full FastAPI
 # app setup while still exercising the real logic in _apply_fp_predictor.
-import importlib
-_main_module = importlib.import_module("app.main")
+_main_module = importlib.import_module("app.main")  # noqa: E402
 _apply_fp_predictor = _main_module._apply_fp_predictor
 
 
@@ -318,9 +367,9 @@ _apply_fp_predictor = _main_module._apply_fp_predictor
 # _apply_fp_predictor integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
     """Tests for the _apply_fp_predictor helper in main.py."""
-
 
     async def _call(self, findings, adjusted_scores):
         """Invoke _apply_fp_predictor with a mocked predictor return value."""
@@ -354,8 +403,10 @@ class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
 
         # An error must have been logged mentioning the mismatch.
         self.assertTrue(
-            any("length mismatch" in msg or "2 scores" in msg or "4 findings" in msg
-                for msg in log_ctx.output),
+            any(
+                "length mismatch" in msg or "2 scores" in msg or "4 findings" in msg
+                for msg in log_ctx.output
+            ),
             "Expected a length-mismatch error in the logs",
         )
 
@@ -379,4 +430,3 @@ class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
         findings = _make_findings(1)
         await self._call(findings, [0.05])
         self.assertAlmostEqual(findings[0].ml_score, 0.05)
-
