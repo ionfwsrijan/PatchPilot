@@ -124,7 +124,7 @@ class FalsePositivePredictor:
             # scores was initialised from findings above, so it still has the
             # correct length — no re-initialisation needed.
 
-        # Invariant check: every code path must produce one score per finding.
+        # Invariant check: every code path must produce one score per finding .
         assert len(scores) == len(findings), (
             f"BUG: adjust_scores returning {len(scores)} scores for "
             f"{len(findings)} findings — length contract violated"
