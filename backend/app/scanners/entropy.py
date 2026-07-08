@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import os
 from collections import Counter
 from pathlib import Path
 from typing import List
@@ -45,82 +46,75 @@ def is_allowlisted(token: str) -> bool:
 
 def run_entropy(repo_dir: Path) -> List[Finding]:
     findings: List[Finding] = []
+    
+    ignored_dirs = {
+        "node_modules", "venv", ".venv", "build", "dist", "target", ".next",
+        ".cache", "coverage", "vendor", "__pycache__", ".git",
+        ".idea", ".vscode", ".tox", ".pytest_cache", ".mypy_cache", 
+        ".ruff_cache", "bin", "obj", "out", "tmp"
+    }
+    
     ignored_extensions = {
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".ico",
-        ".svg",
-        ".zip",
-        ".tar",
-        ".gz",
-        ".mp4",
-        ".pdf",
-        ".woff",
-        ".woff2",
-        ".eot",
-        ".ttf",
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".zip",
+        ".tar", ".gz", ".mp4", ".pdf", ".woff", ".woff2", ".eot", ".ttf",
     }
 
-    for file_path in repo_dir.rglob("*"):
-        if (
-            not file_path.is_file()
-            or file_path.suffix.lower() in ignored_extensions
-            or ".git" in file_path.parts
-        ):
-            continue
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        
+            file_path = Path(root) / file_name
+            
+            if file_path.suffix.lower() in ignored_extensions:
+                continue
 
-        try:
-            content = file_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
 
-        lines = content.splitlines()
-        for line_idx, line in enumerate(lines, start=1):
-            for match in STRING_LITERAL_REGEX.finditer(line):
-                token = match.group(2)
+            lines = content.splitlines()
+            for line_idx, line in enumerate(lines, start=1):
+                for match in STRING_LITERAL_REGEX.finditer(line):
+                    token = match.group(2)
 
-                if is_allowlisted(token):
-                    continue
+                    if is_allowlisted(token):
+                        continue
 
-                entropy_score = calculate_shannon_entropy(token)
-                if entropy_score > 4.0:
-                    relative_path = str(file_path.relative_to(repo_dir))
-                    finding_id = (
-                        f"entropy:high-entropy-string:{relative_path}:{line_idx}"
-                    )
-                    severity = "HIGH"
+                    entropy_score = calculate_shannon_entropy(token)
+                    if entropy_score > 4.0:
+                        relative_path = str(file_path.relative_to(repo_dir))
+                        finding_id = f"entropy:high-entropy-string:{relative_path}:{line_idx}"
+                        severity = "HIGH"
 
-                    raw_data_for_extractor = {
-                        "id": finding_id,
-                        "severity": severity,
-                        "location": {"path": relative_path},
-                        "metadata": {"cwe_category": "CWE-798"},
-                    }
+                        raw_data_for_extractor = {
+                            "id": finding_id,
+                            "severity": severity,
+                            "location": {"path": relative_path},
+                            "metadata": {"cwe_category": "CWE-798"},
+                        }
 
-                    ml_features = extract_features(
-                        raw_data_for_extractor, scanner_name="entropy"
-                    )
-
-                    findings.append(
-                        Finding(
-                            id=finding_id,
-                            category="secret",
-                            severity=severity,
-                            title="High Entropy String Detected",
-                            description=f"Potential hardcoded secret or token discovered (Entropy: {entropy_score:.2f})",
-                            location=Location(
-                                path=relative_path,
-                                start_line=line_idx,
-                                end_line=line_idx,
-                            ),
-                            metadata={
-                                "engine": "entropy",
-                                "entropy_score": entropy_score,
-                                "token_preview": token[:10],
-                            },
-                            features=ml_features,
+                        ml_features = extract_features(
+                            raw_data_for_extractor, scanner_name="entropy"
                         )
-                    )
+
+                        findings.append(
+                            Finding(
+                                id=finding_id,
+                                category="secret",
+                                severity=severity,
+                                title="High Entropy String Detected",
+                                description=f"Potential hardcoded secret or token discovered (Entropy: {entropy_score:.2f})",
+                                location=Location(
+                                    path=relative_path,
+                                    start_line=line_idx,
+                                    end_line=line_idx,
+                                ),
+                                metadata={
+                                    "engine": "entropy",
+                                    "entropy_score": entropy_score,
+                                    "token_preview": token[:10],
+                                },
+                                features=ml_features,
+                            )
+                        )
     return findings
