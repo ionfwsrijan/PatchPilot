@@ -933,7 +933,10 @@ async def verify(
 
     _, _, _, _, findings = await run_in_threadpool(
         functools.partial(
-            _scan_repo_dir, repo_dir, job_dir=job_dir, raw_dir_name="raw_verify",
+            _scan_repo_dir,
+            repo_dir,
+            job_dir=job_dir,
+            raw_dir_name="raw_verify"
         )
     )
 
