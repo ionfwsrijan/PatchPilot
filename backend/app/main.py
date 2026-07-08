@@ -920,7 +920,7 @@ async def verify(
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
 
-    result = verify_repo(repo_dir)
+    result = await run_in_threadpool(verify_repo, repo_dir)
 
     if baseline_job_id is not None:
         try:
@@ -931,8 +931,13 @@ async def verify(
     baseline_job_id = baseline_job_id or job_id
     baseline_findings = await get_baseline_findings(baseline_job_id)
 
-    _, _, _, _, findings = _scan_repo_dir(
-        repo_dir, job_dir=job_dir, raw_dir_name="raw_verify"
+    _, _, _, _, findings = await run_in_threadpool(
+        functools.partial(
+            _scan_repo_dir,
+            repo_dir,
+            job_dir=job_dir,
+            raw_dir_name="raw_verify"
+        )
     )
 
     current_findings = {finding_key(f) for f in findings}
