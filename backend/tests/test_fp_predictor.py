@@ -8,6 +8,14 @@ Covers:
   than findings the update is aborted and an error is logged, preventing
   silent truncation via zip().
 - Happy-path: all findings receive updated ml_score values.
+
+Isolation strategy
+------------------
+All sys.modules stubs are applied via ``patch.dict`` inside
+``setUpClass`` / ``tearDownClass`` so they are automatically removed
+after each test class.  This prevents stubs from polluting sys.modules
+for other test files (e.g. test_llm_patcher, test_deduplicator,
+test_safe_job_dir, test_pdf_builder) that run in the same pytest session.
 """
 
 import importlib
@@ -16,25 +24,18 @@ import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+# ---------------------------------------------------------------------------
+# Stub builders — pure functions, do NOT touch sys.modules at module scope
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Stub out heavy ML dependencies (torch, transformers) so the tests run in
-# environments where those packages are not installed (CI, dev machines).
-# The stubs are inserted into sys.modules BEFORE the app modules are imported.
-# ---------------------------------------------------------------------------
-def _make_torch_stub() -> types.ModuleType:
+
+def _build_torch_stubs() -> dict:
+    """Return a dict of torch sub-module stubs."""
     torch = types.ModuleType("torch")
 
-    # torch.Tensor — needed by scipy's array_api_compat is_torch_array check
     class _Tensor:
         pass
 
-    torch.Tensor = _Tensor  # type: ignore[attr-defined]
-
-    # torch.device
-    torch.device = lambda *a, **kw: MagicMock()  # type: ignore[attr-defined]
-
-    # torch.no_grad — used as a context manager
     class _NoGrad:
         def __enter__(self):
             return self
@@ -42,43 +43,33 @@ def _make_torch_stub() -> types.ModuleType:
         def __exit__(self, *_):
             pass
 
+    torch.Tensor = _Tensor  # type: ignore[attr-defined]
+    torch.device = lambda *a, **kw: MagicMock()  # type: ignore[attr-defined]
     torch.no_grad = _NoGrad  # type: ignore[attr-defined]
-
-    # torch.cat
     torch.cat = MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=[])))  # type: ignore[attr-defined]
-
-    # torch.backends.mps stub
     backends = types.ModuleType("torch.backends")
     mps = types.ModuleType("torch.backends.mps")
     mps.is_available = lambda: False  # type: ignore[attr-defined]
     backends.mps = mps  # type: ignore[attr-defined]
     torch.backends = backends  # type: ignore[attr-defined]
-
-    # torch.cuda stub
     cuda = types.ModuleType("torch.cuda")
     cuda.is_available = lambda: False  # type: ignore[attr-defined]
     torch.cuda = cuda  # type: ignore[attr-defined]
+    return {
+        "torch": torch,
+        "torch.backends": backends,
+        "torch.backends.mps": mps,
+        "torch.cuda": cuda,
+    }
 
-    sys.modules.setdefault("torch", torch)
-    sys.modules.setdefault("torch.backends", backends)
-    sys.modules.setdefault("torch.backends.mps", mps)
-    sys.modules.setdefault("torch.cuda", cuda)
-    return torch
 
-
-def _make_transformers_stub() -> types.ModuleType:
+def _build_transformers_stubs() -> dict:
+    """Return a dict of transformers sub-module stubs."""
     transformers = types.ModuleType("transformers")
     transformers.AutoModel = MagicMock()  # type: ignore[attr-defined]
     transformers.AutoTokenizer = MagicMock()  # type: ignore[attr-defined]
-    sys.modules.setdefault("transformers", transformers)
-    return transformers
+    return {"transformers": transformers}
 
-
-_make_torch_stub()
-_make_transformers_stub()
-
-# Now safe to import app modules.
-from app.ml.fp_predictor import FalsePositivePredictor  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,108 +104,104 @@ def _make_ml_input(n: int) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # FalsePositivePredictor unit tests
+# Stubs are scoped via patch.dict in setUpClass/tearDownClass so they do
+# not leak into other test files.
 # ---------------------------------------------------------------------------
 
 
 class TestFalsePositivePredictor(unittest.TestCase):
+    _patcher = None
+
+    @classmethod
+    def setUpClass(cls):
+        stubs = {**_build_torch_stubs(), **_build_transformers_stubs()}
+        cls._patcher = patch.dict(sys.modules, stubs)
+        cls._patcher.start()
+        sys.modules.pop("app.ml.fp_predictor", None)
+        cls._fp_module = importlib.import_module("app.ml.fp_predictor")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._patcher.stop()
+        sys.modules.pop("app.ml.fp_predictor", None)
+
     @patch("app.ml.fp_predictor.os.path.exists")
     def test_graceful_fallback_missing_model(self, mock_exists):
+        """Returns fallback scores when the classifier model file is absent."""
         mock_exists.return_value = False
-
-        predictor = FalsePositivePredictor()
-
+        predictor = self._fp_module.FalsePositivePredictor()
         self.assertFalse(predictor.is_ready)
-
-        mock_findings = [{"rule_id": "test", "ml_score": 1.0}]
-        result_scores = predictor.adjust_scores(mock_findings)
-
-        self.assertEqual(result_scores, [1.0])
+        self.assertEqual(
+            predictor.adjust_scores([{"rule_id": "test", "ml_score": 1.0}]), [1.0]
+        )
 
     @patch("app.ml.fp_predictor.os.path.exists")
     @patch("app.ml.fp_predictor.joblib.load")
     def test_graceful_fallback_corrupt_model(self, mock_load, mock_exists):
+        """Stays not-ready when the classifier file is corrupt."""
         mock_exists.return_value = True
         mock_load.side_effect = Exception("Corrupt file")
-
-        predictor = FalsePositivePredictor()
-
-        self.assertFalse(predictor.is_ready)
-
-    # --- length-invariant tests ---
+        self.assertFalse(self._fp_module.FalsePositivePredictor().is_ready)
 
     @patch("app.ml.fp_predictor.os.path.exists")
     def test_adjust_scores_same_length_as_findings_not_ready(self, mock_exists):
         """adjust_scores returns exactly len(findings) scores when not ready."""
         mock_exists.return_value = False
-        predictor = FalsePositivePredictor()
-
+        predictor = self._fp_module.FalsePositivePredictor()
         findings = _make_ml_input(5)
-        scores = predictor.adjust_scores(findings)
-
-        self.assertEqual(len(scores), len(findings))
+        self.assertEqual(len(predictor.adjust_scores(findings)), len(findings))
 
     @patch("app.ml.fp_predictor.os.path.exists")
     def test_adjust_scores_empty_findings(self, mock_exists):
         """Empty findings list returns an empty scores list."""
         mock_exists.return_value = False
-        predictor = FalsePositivePredictor()
-
-        scores = predictor.adjust_scores([])
-        self.assertEqual(scores, [])
+        self.assertEqual(self._fp_module.FalsePositivePredictor().adjust_scores([]), [])
 
     @patch("app.ml.fp_predictor.os.path.exists")
     def test_adjust_scores_length_invariant_on_inference_exception(self, mock_exists):
-        """Even when ML inference raises, returned scores must match findings length."""
+        """Returned scores must match findings length even when inference raises."""
         mock_exists.return_value = False
-        predictor = FalsePositivePredictor()
-        # Force is_ready=True and simulate a crashing classifier.
+        predictor = self._fp_module.FalsePositivePredictor()
         predictor.is_ready = True
         predictor._models_loaded = True
         predictor.tokenizer = MagicMock(side_effect=RuntimeError("boom"))
-
         findings = _make_ml_input(3)
-        # adjust_scores should catch the exception internally and still return
-        # a list of the correct length.
-        scores = predictor.adjust_scores(findings)
-        self.assertEqual(len(scores), len(findings))
+        self.assertEqual(len(predictor.adjust_scores(findings)), len(findings))
 
     @patch("app.ml.fp_predictor.os.path.exists")
     def test_adjust_scores_ml_score_none_defaults_to_1(self, mock_exists):
         """Findings with ml_score=None default to 1.0 in the returned scores."""
         mock_exists.return_value = False
-        predictor = FalsePositivePredictor()
-
-        findings = [{"rule_id": "r", "ml_score": None}]
-        scores = predictor.adjust_scores(findings)
-        self.assertEqual(scores, [1.0])
+        predictor = self._fp_module.FalsePositivePredictor()
+        self.assertEqual(
+            predictor.adjust_scores([{"rule_id": "r", "ml_score": None}]), [1.0]
+        )
 
 
 # ---------------------------------------------------------------------------
-# Stub heavy main.py third-party deps so _apply_fp_predictor can be imported
-# without the full app stack (aiosqlite, httpx, fastapi, pydantic, etc.).
+# Builder for all app.* + third-party stubs needed to import app.main
 # ---------------------------------------------------------------------------
-def _stub_main_deps() -> None:
-    """Insert minimal stubs for every third-party module that main.py imports."""
-    stubs: dict[str, object] = {}
 
-    # aiosqlite
-    aiosqlite = types.ModuleType("aiosqlite")
-    stubs["aiosqlite"] = aiosqlite
 
-    # httpx
-    httpx = types.ModuleType("httpx")
+def _build_main_dep_stubs() -> dict:
+    """Return a dict of stubs for every third-party / app module main.py uses."""
+    stubs: dict = {}
+
+    def _mod(name: str, **attrs) -> types.ModuleType:
+        m = types.ModuleType(name)
+        for k, v in attrs.items():
+            setattr(m, k, v)
+        stubs[name] = m
+        return m
+
+    _mod("aiosqlite")
+    httpx = _mod("httpx")
     httpx.RequestError = Exception  # type: ignore[attr-defined]
     httpx.HTTPStatusError = Exception  # type: ignore[attr-defined]
     httpx.AsyncClient = MagicMock()  # type: ignore[attr-defined]
-    stubs["httpx"] = httpx
-
-    # pydantic
-    pydantic = types.ModuleType("pydantic")
+    pydantic = _mod("pydantic")
     pydantic.BaseModel = object  # type: ignore[attr-defined]
     pydantic.Field = lambda *a, **kw: None  # type: ignore[attr-defined]
-    stubs["pydantic"] = pydantic
-
-    # fastapi + sub-modules
     for mod_name in (
         "fastapi",
         "fastapi.concurrency",
@@ -222,8 +209,7 @@ def _stub_main_deps() -> None:
         "fastapi.middleware.cors",
         "fastapi.responses",
     ):
-        stubs[mod_name] = types.ModuleType(mod_name)
-
+        _mod(mod_name)
     fastapi_mod = stubs["fastapi"]
     for attr in (
         "FastAPI",
@@ -237,43 +223,22 @@ def _stub_main_deps() -> None:
         "Depends",
     ):
         setattr(fastapi_mod, attr, MagicMock())
-
-    fastapi_concurrency = stubs["fastapi.concurrency"]
-    fastapi_concurrency.run_in_threadpool = AsyncMock()  # type: ignore[attr-defined]
-    fastapi_mod.concurrency = fastapi_concurrency  # type: ignore[attr-defined]
-
-    cors_mod = stubs["fastapi.middleware.cors"]
-    cors_mod.CORSMiddleware = MagicMock()  # type: ignore[attr-defined]
-
-    resp_mod = stubs["fastapi.responses"]
+    fc = stubs["fastapi.concurrency"]
+    fc.run_in_threadpool = AsyncMock()  # type: ignore[attr-defined]
+    fastapi_mod.concurrency = fc  # type: ignore[attr-defined]
+    stubs["fastapi.middleware.cors"].CORSMiddleware = MagicMock()  # type: ignore[attr-defined]
     for attr in ("FileResponse", "Response", "StreamingResponse"):
-        setattr(resp_mod, attr, MagicMock())
+        setattr(stubs["fastapi.responses"], attr, MagicMock())
 
-    for name, stub in stubs.items():
-        sys.modules.setdefault(name, stub)  # type: ignore[arg-type]
-
-    # -----------------------------------------------------------------------
-    # Stub every app.* sub-module that main.py imports from.
-    # We register LEAF modules (e.g. "app.ml.ranker") individually so their
-    # from-import symbols resolve without touching real package init files.
-    # Order matters for packages: register the parent before children.
-    # -----------------------------------------------------------------------
-    def _mod(name: str, **attrs) -> types.ModuleType:
-        m = sys.modules.get(name) or types.ModuleType(name)
-        for k, v in attrs.items():
-            setattr(m, k, v)
-        sys.modules.setdefault(name, m)
-        return m
-
-    # Parent packages (needed so sub-module dotted names resolve)
-    _mod("app.ml")
-    _mod("app.scanners")
-    _mod("app.utils")
-    _mod("app.remediation")
-    _mod("app.reports")
-    _mod("app.sandbox")
-
-    # app.db
+    for pkg in (
+        "app.ml",
+        "app.scanners",
+        "app.utils",
+        "app.remediation",
+        "app.reports",
+        "app.sandbox",
+    ):
+        _mod(pkg)
     _mod(
         "app.db",
         create_findings=MagicMock(),
@@ -292,8 +257,6 @@ def _stub_main_deps() -> None:
         update_job_status=MagicMock(),
         upsert_contributor_stat=MagicMock(),
     )
-
-    # app.models
     _mod(
         "app.models",
         Finding=MagicMock,
@@ -308,8 +271,6 @@ def _stub_main_deps() -> None:
         ScanResponse=MagicMock,
         VerifyResponse=MagicMock,
     )
-
-    # app.ml.*  — stub BEFORE main.py's relative imports run
     _mod(
         "app.ml.deduplicator",
         SENTENCE_TRANSFORMERS_AVAILABLE=False,
@@ -323,14 +284,10 @@ def _stub_main_deps() -> None:
     )
     _mod("app.ml.embedder", embed=MagicMock())
     _mod("app.ml.llm_patcher", patch_finding=MagicMock())
-
-    # app.scanners.*
     _mod("app.scanners.entropy", run_entropy=MagicMock())
     _mod("app.scanners.gitleaks", run_gitleaks=MagicMock())
     _mod("app.scanners.osv", run_osv_scanner=MagicMock())
     _mod("app.scanners.semgrep", run_semgrep=MagicMock())
-
-    # app.utils.*
     _mod(
         "app.utils.fs",
         ensure_dir=MagicMock(),
@@ -339,46 +296,62 @@ def _stub_main_deps() -> None:
         unzip_to_dir=MagicMock(),
     )
     _mod("app.utils.ml_features", extract_features=MagicMock())
-
-    # app.remediation.*
     _mod("app.remediation.engine", propose_fixes=MagicMock())
-
-    # app.reports.*
     _mod("app.reports.evidence_pack", build_evidence_pack=MagicMock())
     _mod(
         "app.reports.pdf_builder",
         generate_audit_pdf=MagicMock(),
         generate_org_audit_pdf=MagicMock(),
     )
-
-    # app.sandbox.*
     _mod("app.sandbox.verify", verify_repo=MagicMock())
-
-
-_stub_main_deps()
-
-# Import the function under test directly — avoids executing the full FastAPI
-# app setup while still exercising the real logic in _apply_fp_predictor.
-_main_module = importlib.import_module("app.main")  # noqa: E402
-_apply_fp_predictor = _main_module._apply_fp_predictor
+    return stubs
 
 
 # ---------------------------------------------------------------------------
 # _apply_fp_predictor integration tests
+# Stubs are scoped via patch.dict in setUpClass/tearDownClass.
 # ---------------------------------------------------------------------------
 
 
 class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
     """Tests for the _apply_fp_predictor helper in main.py."""
 
+    _patcher = None
+    _main_module = None
+    _apply_fp_predictor = None
+
+    @classmethod
+    def setUpClass(cls):
+        stubs = {
+            **_build_torch_stubs(),
+            **_build_transformers_stubs(),
+            **_build_main_dep_stubs(),
+        }
+        cls._patcher = patch.dict(sys.modules, stubs)
+        cls._patcher.start()
+        # Evict any previously cached app.main so it re-imports under our stubs.
+        sys.modules.pop("app.main", None)
+        cls._main_module = importlib.import_module("app.main")
+        # Wrap in staticmethod so self is not injected when called as
+        # self._apply_fp_predictor(findings) inside test methods.
+        cls._apply_fp_predictor = staticmethod(cls._main_module._apply_fp_predictor)
+
+    @classmethod
+    def tearDownClass(cls):
+        # Only remove app.main itself — patch.dict.stop() restores the stubs
+        # we inserted. Wiping all app.* would also remove C-extension backed
+        # modules (numpy, sklearn internals) which Python refuses to reload.
+        sys.modules.pop("app.main", None)
+        cls._patcher.stop()
+
     async def _call(self, findings, adjusted_scores):
-        """Invoke _apply_fp_predictor with a mocked predictor return value."""
+        """Invoke _apply_fp_predictor with run_in_threadpool mocked."""
         with patch.object(
-            _main_module,
+            self._main_module,
             "run_in_threadpool",
             new=AsyncMock(return_value=adjusted_scores),
         ):
-            await _apply_fp_predictor(findings)
+            await self._apply_fp_predictor(findings)
 
     async def test_happy_path_all_findings_updated(self):
         """All findings have ml_score updated when lengths match."""
@@ -391,17 +364,13 @@ class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
     async def test_mismatch_aborts_update_and_logs_error(self):
         """When adjusted_scores is shorter than findings, no finding is updated."""
         findings = _make_findings(4)
-        # Predictor returns only 2 scores for 4 findings.
-        adjusted = [0.5, 0.5]
+        adjusted = [0.5, 0.5]  # only 2 scores for 4 findings
 
         with self.assertLogs("app.main", level="ERROR") as log_ctx:
             await self._call(findings, adjusted)
 
-        # No finding should have been mutated.
         for f in findings:
             self.assertEqual(f.ml_score, 1.0)
-
-        # An error must have been logged mentioning the mismatch.
         self.assertTrue(
             any(
                 "length mismatch" in msg or "2 scores" in msg or "4 findings" in msg
@@ -420,10 +389,7 @@ class TestApplyFpPredictor(unittest.IsolatedAsyncioTestCase):
 
         for f in findings:
             self.assertEqual(f.ml_score, 1.0)
-
-        self.assertTrue(
-            any("length mismatch" in msg for msg in log_ctx.output),
-        )
+        self.assertTrue(any("length mismatch" in msg for msg in log_ctx.output))
 
     async def test_single_finding_updated_correctly(self):
         """Edge-case: single finding is updated with the single returned score."""
