@@ -45,9 +45,16 @@ def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
             # Check for symlink via Unix permissions
             mode = (info.external_attr >> 16) & 0xFFFF
             if stat.S_ISLNK(mode):
-                link_target = z.read(info.filename).decode("utf-8", errors="ignore").strip()
-                resolved_target = ((out_path / info.filename).parent / link_target).resolve()
-                if out_path not in resolved_target.parents and resolved_target != out_path:
+                link_target = (
+                    z.read(info.filename).decode("utf-8", errors="ignore").strip()
+                )
+                resolved_target = (
+                    (out_path / info.filename).parent / link_target
+                ).resolve()
+                if (
+                    out_path not in resolved_target.parents
+                    and resolved_target != out_path
+                ):
                     raise ValueError(
                         f"Zip Slip blocked: malicious symlink target detected '{info.filename}' -> '{link_target}'"
                     )
