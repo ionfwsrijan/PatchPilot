@@ -30,11 +30,9 @@ class TestFixPredictor(unittest.TestCase):
     def test_predict_confidence_and_sort(self, mock_load, mock_exists):
         mock_exists.return_value = True
 
-        mock_model = MagicMock()
+        # Model that only implements `predict`
+        mock_model = MagicMock(spec=["predict"])
         mock_model.predict.return_value = [0.85, 0.95]
-        if hasattr(mock_model, "predict_proba"):
-            del mock_model.predict_proba
-
         mock_load.return_value = mock_model
 
         fixes = [
@@ -59,3 +57,28 @@ class TestFixPredictor(unittest.TestCase):
             # Low confidence should be second
             self.assertEqual(result[1].finding_id, "low_conf")
             self.assertEqual(result[1].fix_confidence, 0.85)
+
+    @patch("app.ml.fix_predictor.os.path.exists")
+    @patch("app.ml.fix_predictor.joblib.load")
+    def test_predict_confidence_with_predict_proba(self, mock_load, mock_exists):
+        mock_exists.return_value = True
+
+        # Model that implements predict_proba
+        mock_model = MagicMock(spec=["predict_proba"])
+        # Simulate a 2-column predict_proba result
+        import numpy as _np
+
+        mock_model.predict_proba.return_value = _np.array([[0.15, 0.85], [0.05, 0.95]])
+        mock_load.return_value = mock_model
+
+        fixes = [
+            Fix(finding_id="low_conf", status="suggested", summary="Fix low", diff="a"),
+            Fix(
+                finding_id="high_conf", status="suggested", summary="Fix high", diff="b"
+            ),
+        ]
+
+        with patch("app.ml.fix_predictor.FIX_PREDICTOR_MODEL", mock_model):
+            result = predict_confidence(fixes)
+            self.assertEqual(result[0].finding_id, "high_conf")
+            self.assertAlmostEqual(result[0].fix_confidence, 0.95)
