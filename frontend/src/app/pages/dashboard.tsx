@@ -30,13 +30,13 @@ export function Dashboard() {
   const { recentJobs, handleScanSuccess, onClearRecents } = useRecentJobs();
   
   const { 
-    scanLoading, scanError, activeSingleScanId, singleScanState, 
-    handleZipFile, handleImportFromUrl, setScanError 
-  } = useSingleScan(handleScanSuccess);
+    scanLoading, scanError, activeSingleScanId, activeProjectName, 
+    handleZipFile, handleImportFromUrl, setScanError, resetSingleScan 
+  } = useSingleScan();
   
   const { 
-    orgScanLoading, orgScanError, activeOrgJobId, orgStatusData, 
-    expectedRepoCount, isAborting, handleScanOrg, handleAbortScan, closeOrgScan 
+    orgScanLoading, orgScanError, activeOrgJobId, expectedRepoCount, 
+    handleScanOrg, resetOrgScan, setOrgScanError 
   } = useOrganizationScan();
 
   const isAnyLoading = scanLoading || orgScanLoading;
@@ -95,12 +95,12 @@ export function Dashboard() {
                   {isAnyLoading ? "Scanning..." : "Browse Files"}
                 </Button>
 
-                <Button variant="outline" disabled={isAnyLoading} onClick={() => { setScanError(null); setUrlDialogOpen(true); }}>
+                <Button variant="outline" disabled={isAnyLoading} onClick={() => { setScanError(null); setOrgScanError(null); setUrlDialogOpen(true); }}>
                   <LinkIcon className="h-4 w-4 mr-2" />
                   Import from URL
                 </Button>
 
-                <Button variant="outline" disabled={isAnyLoading} onClick={() => { setScanError(null); setOrgDialogOpen(true); }}>
+                <Button variant="outline" disabled={isAnyLoading} onClick={() => { setScanError(null); setOrgScanError(null); setOrgDialogOpen(true); }}>
                   <Building2 className="h-4 w-4 mr-2" />
                   Scan Organization
                 </Button>
@@ -172,14 +172,19 @@ export function Dashboard() {
         isLoading={orgScanLoading} 
       />
 
-      <ActiveSingleScanModal scanId={activeSingleScanId} scanState={singleScanState} />
+      <ActiveSingleScanModal 
+        scanId={activeSingleScanId} 
+        projectName={activeProjectName}
+        onScanSuccess={handleScanSuccess}
+        onScanError={(err) => setScanError(err)}
+        onClose={resetSingleScan}
+      />
 
       <ActiveOrgScanModal 
-        statusData={orgStatusData} 
+        orgJobId={activeOrgJobId} 
         expectedRepoCount={expectedRepoCount} 
-        isAborting={isAborting} 
-        onAbort={handleAbortScan} 
-        onClose={closeOrgScan} 
+        onCancel={resetOrgScan} 
+        onClose={resetOrgScan} 
       />
     </div>
   );

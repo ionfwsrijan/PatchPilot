@@ -1,13 +1,70 @@
+import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "../ui/utils";
+import { API_BASE } from "../../lib/api";
 
 interface ActiveSingleScanModalProps {
   scanId: string | null;
-  scanState: any;
+  projectName: string | null;
+  onScanSuccess: (scan: { job_id: string; project_name: string; findings?: any[] }) => void;
+  onScanError: (error: string) => void;
+  onClose: () => void;
 }
 
-export function ActiveSingleScanModal({ scanId, scanState }: ActiveSingleScanModalProps) {
-  if (!scanId || !scanState) return null;
+export function ActiveSingleScanModal({ 
+  scanId, 
+  projectName, 
+  onScanSuccess, 
+  onScanError, 
+  onClose 
+}: ActiveSingleScanModalProps) {
+  const [singleScanState, setSingleScanState] = useState<any>(null);
+
+  useEffect(() => {
+    if (!scanId) {
+      setSingleScanState(null);
+      return;
+    }
+
+    setSingleScanState({ sast: 'pending', dependency: 'pending', secrets: 'pending', status: 'running' });
+    const sse = new EventSource(`${API_BASE}/api/scans/${scanId}/stream`);
+
+    sse.onmessage = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.error) {
+        sse.close();
+        onScanError("Live scan tracking failed.");
+        onClose();
+        return;
+      }
+      setSingleScanState(parsed);
+
+      if (parsed.status === "completed" || parsed.status === "failed") {
+        sse.close();
+        setTimeout(async () => {
+          try {
+            const res = await fetch(`${API_BASE}/jobs/${scanId}/findings`);
+            const data = await res.json();
+            onScanSuccess({ job_id: scanId, project_name: projectName || "", findings: data.findings || [] });
+            onClose();
+          } catch (err) {
+            onScanSuccess({ job_id: scanId, project_name: projectName || "", findings: [] });
+            onClose();
+          }
+        }, 1000);
+      }
+    };
+
+    sse.onerror = () => {
+      // Optional: error status handled by sse client
+    };
+
+    return () => {
+      sse.close();
+    };
+  }, [scanId, projectName, onScanSuccess, onScanError, onClose]);
+
+  if (!scanId || !singleScanState) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-300">
