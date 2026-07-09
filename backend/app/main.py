@@ -19,6 +19,7 @@ import aiosqlite
 import httpx
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     Form,
@@ -74,6 +75,7 @@ from .scanners.entropy import run_entropy
 from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
+from .security import verify_api_key
 from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
@@ -131,6 +133,8 @@ async def startup():
         RANKER = await run_in_threadpool(load_ranker)
     except Exception:
         RANKER = None
+    # Start background cleanup for finished ACTIVE_SCANS entries
+    asyncio.create_task(_cleanup_active_scans_loop())
 
 
 @app.get("/health")
@@ -238,8 +242,22 @@ def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
     return deps
 
 
-ACTIVE_SCANS = {}
+ACTIVE_SCANS: dict[str, dict] = {}
 ORG_CANCEL_EVENTS = {}
+
+# How long to keep completed/failed scan progress in memory for SSE clients.
+# After this TTL, entries are removed to prevent unbounded growth.
+_ACTIVE_SCANS_RETENTION_SECONDS_RAW = os.environ.get("ACTIVE_SCANS_RETENTION_SECONDS")
+try:
+    ACTIVE_SCANS_RETENTION_SECONDS = (
+        int(_ACTIVE_SCANS_RETENTION_SECONDS_RAW)
+        if _ACTIVE_SCANS_RETENTION_SECONDS_RAW
+        else 600
+    )
+except ValueError:
+    ACTIVE_SCANS_RETENTION_SECONDS = 600
+
+ACTIVE_SCANS_RETENTION_SECONDS = max(1, ACTIVE_SCANS_RETENTION_SECONDS)
 
 
 def _scan_repo_dir(
@@ -287,11 +305,11 @@ def _scan_repo_dir(
     if progress_cb:
         progress_cb("secrets", "completed")
 
-    entropy = run_entropy(repo_dir)
-
-    findings: List[Finding] = []
+    findings = []
     findings.extend(semgrep)
     findings.extend(osv)
+    entropy = run_entropy(repo_dir)
+
     findings.extend(gitleaks)
     findings.extend(entropy)
 
@@ -306,6 +324,37 @@ def _scan_repo_dir(
         findings = _prioritize_findings(findings)
 
     return semgrep, osv, gitleaks, entropy, findings
+
+
+async def _cleanup_active_scans_loop() -> None:
+    """Periodically remove finished scan entries from ACTIVE_SCANS.
+
+    This prevents unbounded memory growth in long-running deployments.
+    """
+    while True:
+        try:
+            cutoff = (
+                datetime.now(timezone.utc).timestamp() - ACTIVE_SCANS_RETENTION_SECONDS
+            )
+            # Copy keys to avoid mutating while iterating.
+            for job_id in list(ACTIVE_SCANS.keys()):
+                state = ACTIVE_SCANS.get(job_id)
+                if not state:
+                    continue
+                status = state.get("status")
+                if status not in {"completed", "failed", "aborted"}:
+                    continue
+
+                finished_at = state.get("finished_at")
+                if finished_at is None:
+                    # If finished_at is missing, keep entry for safety.
+                    continue
+
+                if finished_at <= cutoff:
+                    ACTIVE_SCANS.pop(job_id, None)
+        except Exception:
+            logger.exception("ACTIVE_SCANS cleanup loop error")
+        await asyncio.sleep(30)
 
 
 def finding_key(f: Finding):
@@ -584,10 +633,14 @@ async def _run_single_scan_task(
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "completed"
             ACTIVE_SCANS[job_id]["findings_count"] = finding_count
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
     except Exception:
         logger.exception("Failed scan task for %s", job_id)
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "failed"
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
         try:
             db = await get_db()
             try:
@@ -1062,7 +1115,11 @@ def evidence_pack(
     )
 
 
-@app.get("/api/scans/{job_id}/report/pdf", tags=["Reports"])
+@app.get(
+    "/api/scans/{job_id}/report/pdf",
+    tags=["Reports"],
+    dependencies=[Depends(verify_api_key)],
+)
 async def download_audit_pdf(job_id: str):
     db = await get_db()
     try:
@@ -1113,7 +1170,10 @@ async def download_audit_pdf(job_id: str):
     )
 
 
-@app.get("/jobs/{job_id}/findings")
+@app.get(
+    "/jobs/{job_id}/findings",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_findings(job_id: str):
     db = await get_db()
     try:
@@ -1208,7 +1268,10 @@ async def update_finding_status_endpoint(finding_id: str, payload: FindingStatus
     return {"id": finding_id, "status": payload.status}
 
 
-@app.get("/jobs/{job_id}/verify")
+@app.get(
+    "/jobs/{job_id}/verify",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_verify(job_id: str):
     db = await get_db()
     try:
@@ -1262,21 +1325,30 @@ async def delete_job_endpoint(job_id: str):
     return {"deleted": True}
 
 
-@app.get("/trends")
+@app.get(
+    "/trends",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_trends_endpoint(limit: int = 6):
     """Fetches historical trend data for the frontend dashboard."""
     data = await get_trend_data(limit)
     return data
 
 
-@app.get("/cwe-distribution")
+@app.get(
+    "/cwe-distribution",
+    dependencies=[Depends(verify_api_key)],
+)
 async def cwe_distribution_endpoint():
     """Fetches the vulnerability distribution for the frontend donut chart."""
     data = await get_cwe_distribution()
     return data
 
 
-@app.get("/dependency-diff")
+@app.get(
+    "/dependency-diff",
+    dependencies=[Depends(verify_api_key)],
+)
 async def dependency_diff_endpoint():
     data = await get_dependency_diff()
     return data
@@ -1294,13 +1366,19 @@ class LeaderboardUpdateRequest(BaseModel):
     is_pr_merged: bool = False
 
 
-@app.get("/leaderboard")
+@app.get(
+    "/leaderboard",
+    dependencies=[Depends(verify_api_key)],
+)
 async def leaderboard_endpoint():
     data = await get_leaderboard_stats()
     return data
 
 
-@app.post("/leaderboard/update")
+@app.post(
+    "/leaderboard/update",
+    dependencies=[Depends(verify_api_key)],
+)
 async def update_leaderboard_endpoint(req: LeaderboardUpdateRequest):
     pattern = r"(?i)(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)"
     matches = re.findall(pattern, req.pr_description)
@@ -1580,7 +1658,10 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
         await db.close()
 
 
-@app.post("/api/scans/org")
+@app.post(
+    "/api/scans/org",
+    dependencies=[Depends(verify_api_key)],
+)
 async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     m = re.match(
         r"^https?://github\.com/([^/]+)/?$", req.org_url.strip(), re.IGNORECASE
@@ -1612,7 +1693,11 @@ async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     return {"org_job_id": org_job_id, "org_name": org_name, "repo_count": len(repos)}
 
 
-@app.get("/api/scans/org/{org_job_id}/status", response_model=OrgJobStatusResponse)
+@app.get(
+    "/api/scans/org/{org_job_id}/status",
+    response_model=OrgJobStatusResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_org_status(org_job_id: str):
     db = await get_db()
     try:
