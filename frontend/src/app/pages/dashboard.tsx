@@ -1,5 +1,8 @@
-import { useRef, useState } from "react";
-import { Upload, Link as LinkIcon, Clock, Building2 } from "lucide-react";
+import { useRef, useState, useEffect } from "react";
+import { Upload, Link as LinkIcon, Clock, Trash2, Download, Loader2, CheckCircle, AlertTriangle, Building2, Layers } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { scanRepoUrl, scanZip, downloadAuditReport, scanOrganization, getOrgJobStatus, abortOrganizationScan, API_BASE } from "../lib/api";
+import { saveLastScan } from "../lib/scan-store";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { TrendChart } from "../components/trend-chart";
@@ -107,21 +110,27 @@ export function Dashboard() {
 
           <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50">
-              <div className="rounded-full bg-primary/10 p-2"><Clock className="h-4 w-4 text-primary" /></div>
+              <div className="rounded-full bg-primary/10 p-2">
+                <Clock className="h-4 w-4 text-primary" />
+              </div>
               <div>
                 <div className="text-sm font-medium mb-1">Fast Scanning</div>
                 <div className="text-xs text-muted-foreground">Typical scans complete in 2-5 minutes</div>
               </div>
             </div>
             <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50">
-              <div className="rounded-full bg-primary/10 p-2"><Clock className="h-4 w-4 text-primary" /></div>
+              <div className="rounded-full bg-primary/10 p-2">
+                <Clock className="h-4 w-4 text-primary" />
+              </div>
               <div>
                 <div className="text-sm font-medium mb-1">Multiple Tools</div>
                 <div className="text-xs text-muted-foreground">Semgrep, OSV Scanner, and Gitleaks</div>
               </div>
             </div>
             <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50">
-              <div className="rounded-full bg-primary/10 p-2"><Clock className="h-4 w-4 text-primary" /></div>
+              <div className="rounded-full bg-primary/10 p-2">
+                <Clock className="h-4 w-4 text-primary" />
+              </div>
               <div>
                 <div className="text-sm font-medium mb-1">Evidence Pack</div>
                 <div className="text-xs text-muted-foreground">Complete audit trail included</div>
