@@ -1,27 +1,28 @@
 from collections import Counter
 
-def evaluate_policy(findings,policy):
-    counts=Counter()
+
+def evaluate_policy(findings, policy):
+    counts = Counter()
 
     for finding in findings:
-        counts[finding.severity.lower()]+=1
+        counts[finding.severity.lower()] += 1
 
-    violations=[]
+    violations = []
 
     if "block_if" in policy:
-        severity=policy["block_if"]["severity"]
-        threshold=policy["block_if"]["threshold"]
+        severity = policy["block_if"]["severity"]
+        threshold = policy["block_if"]["threshold"]
 
-        actual=counts.get(severity, 0)
+        actual = counts.get(severity, 0)
 
-        if actual>threshold:
+        if actual > threshold:
             violations.append(
                 {
-                    "rule":f"{severity}>{threshold}",
-                    "actual":actual,
+                    "rule": f"{severity}>{threshold}",
+                    "actual": actual,
                 }
             )
     return {
-        "policy_status":"FAILED" if violations else "PASSED",
-        "violations":violations,
+        "policy_status": "FAILED" if violations else "PASSED",
+        "violations": violations,
     }

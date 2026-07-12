@@ -1,6 +1,5 @@
 import yaml
 
-
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 
 

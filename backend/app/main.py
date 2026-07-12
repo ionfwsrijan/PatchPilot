@@ -14,8 +14,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
-from app.policy.parser import parse_policy
-from app.policy.evaluator import evaluate_policy
 
 import aiosqlite
 import httpx
@@ -34,6 +32,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+
+from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+from app.ml.ranker import load_ranker, scoring_function
+from app.policy.evaluator import evaluate_policy
+from app.policy.parser import parse_policy
 
 from .db import (
     create_findings,
@@ -538,7 +541,11 @@ def _maybe_use_single_top_folder(repo_dir: Path) -> Path:
 
 
 async def _run_single_scan_task(
-    job_id: str, project_name: str, scan_method: str, scan_root: Path,  policy_path: Path | None = None,
+    job_id: str,
+    project_name: str,
+    scan_method: str,
+    scan_root: Path,
+    policy_path: Path | None = None,
 ):
     def update_progress(phase, status):
         if job_id in ACTIVE_SCANS:
@@ -570,14 +577,14 @@ async def _run_single_scan_task(
 
         if policy_path is not None:
             try:
-               policy = parse_policy(policy_path)
-               policy_result = evaluate_policy(findings, policy)
+                policy = parse_policy(policy_path)
+                policy_result = evaluate_policy(findings, policy)
             except Exception as e:
-               policy_result = {
+                policy_result = {
                     "policy_status": "ERROR",
                     "reason": str(e),
                     "violations": [],
-               }
+                }
 
         disable_dedup = os.environ.get("DISABLE_DEDUP", "").lower() == "true"
         try:
@@ -740,8 +747,8 @@ async def scan(
     if policy is not None:
         policy_path = job_dir / policy.filename
         with open(policy_path, "wb") as f:
-           while chunk := await policy.read(1024 * 1024):
-             f.write(chunk)
+            while chunk := await policy.read(1024 * 1024):
+                f.write(chunk)
     ensure_dir(repo_dir)
 
     try:
@@ -752,7 +759,12 @@ async def scan(
 
     scan_root = _maybe_use_single_top_folder(repo_dir)
     background_tasks.add_task(
-        _run_single_scan_task, job_id, project_name, "zip", scan_root, policy_path,
+        _run_single_scan_task,
+        job_id,
+        project_name,
+        "zip",
+        scan_root,
+        policy_path,
     )
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 

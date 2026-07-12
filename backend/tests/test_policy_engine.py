@@ -1,5 +1,6 @@
-from app.policy.evaluator import evaluate_policy
 from app.models import Finding
+from app.policy.evaluator import evaluate_policy
+
 
 def test_policy_fails_on_critical():
     findings = [
@@ -23,6 +24,7 @@ def test_policy_fails_on_critical():
     assert result["policy_status"] == "FAILED"
     assert len(result["violations"]) == 1
 
+
 def test_policy_passes_without_critical():
     findings = []
 
@@ -37,6 +39,7 @@ def test_policy_passes_without_critical():
 
     assert result["policy_status"] == "PASSED"
     assert len(result["violations"]) == 0
+
 
 def test_policy_counts_multiple_critical_findings():
     findings = [
