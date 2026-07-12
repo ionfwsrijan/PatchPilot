@@ -1303,16 +1303,17 @@ async def delete_job_endpoint(job_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    safe_rmtree(job_dir)
-
     db = await get_db()
     try:
         await delete_job(db, job_id)
+    except Exception as e:
+        logger.exception(f"Failed to delete job {job_id} from db")
+        raise HTTPException(status_code=500, detail="Database error during deletion")
     finally:
         await db.close()
+
+    if job_dir.exists():
+        safe_rmtree(job_dir)
 
     return {"deleted": True}
 

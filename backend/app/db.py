@@ -223,10 +223,15 @@ async def update_job_status(
 
 
 async def delete_job(db: aiosqlite.Connection, job_id: str):
-    await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
-    await db.commit()
+    try:
+        await db.execute("BEGIN TRANSACTION")
+        await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
 
 async def create_findings(
