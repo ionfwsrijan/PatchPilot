@@ -33,20 +33,19 @@
   --popover: #ffffff;
   --popover-foreground: #0f1419;
   
-  /* Brand: Teal/Cyan primary */
-  --primary: #0891b2;
-  --primary-hover: #0e7490;
+  /* Brand: monochrome primary */
+  --primary: #050505;
+  --primary-hover: #1f1f1f;
   --primary-foreground: #ffffff;
   
-  /* Purple secondary */
-  --secondary: #8b5cf6;
-  --secondary-hover: #7c3aed;
+  --secondary: #050505;
+  --secondary-hover: #1f1f1f;
   --secondary-foreground: #ffffff;
   
   --muted: #f1f3f6;
   --muted-foreground: #57606a;
   
-  --accent: #e0f2fe;
+  --accent: #eceff3;
   --accent-foreground: #0f1419;
   
   --destructive: #dc2626;
@@ -57,8 +56,15 @@
   --input: rgba(27, 31, 36, 0.12);
   --input-background: #ffffff;
   
-  --ring: #0891b2;
+  --ring: #050505;
   --ring-offset: #ffffff;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #0f1419;
+  --sidebar-border: rgba(27, 31, 36, 0.12);
+  --sidebar-accent: #050505;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-ring: #050505;
   
   /* Severity colors - Light mode */
   --severity-critical: #dc2626;
@@ -105,44 +111,50 @@
 
 .dark {
   /* Dark Mode Colors */
-  --background: #0d1117;
-  --background-subtle: #161b22;
-  --foreground: #e6edf3;
-  --foreground-muted: #8b949e;
+  --background: #000000;
+  --background-subtle: #080808;
+  --foreground: #ffffff;
+  --foreground-muted: #a3a3a3;
   
-  --card: #161b22;
-  --card-foreground: #e6edf3;
-  --card-border: rgba(240, 246, 252, 0.1);
+  --card: #050505;
+  --card-foreground: #ffffff;
+  --card-border: rgba(255, 255, 255, 0.14);
   
-  --popover: #1c2128;
-  --popover-foreground: #e6edf3;
+  --popover: #050505;
+  --popover-foreground: #ffffff;
   
-  /* Brand: Teal/Cyan primary */
-  --primary: #06b6d4;
-  --primary-hover: #22d3ee;
-  --primary-foreground: #0d1117;
+  /* Brand: monochrome primary */
+  --primary: #ffffff;
+  --primary-hover: #e5e5e5;
+  --primary-foreground: #000000;
   
-  /* Purple secondary */
-  --secondary: #a78bfa;
-  --secondary-hover: #c4b5fd;
-  --secondary-foreground: #0d1117;
+  --secondary: #ffffff;
+  --secondary-hover: #e5e5e5;
+  --secondary-foreground: #000000;
   
-  --muted: #21262d;
-  --muted-foreground: #8b949e;
+  --muted: #111111;
+  --muted-foreground: #a3a3a3;
   
-  --accent: #1c2f3d;
-  --accent-foreground: #e6edf3;
+  --accent: #1a1a1a;
+  --accent-foreground: #ffffff;
   
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
   
-  --border: rgba(240, 246, 252, 0.1);
-  --border-strong: rgba(240, 246, 252, 0.16);
-  --input: rgba(240, 246, 252, 0.1);
-  --input-background: #0d1117;
+  --border: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --input: rgba(255, 255, 255, 0.16);
+  --input-background: #000000;
   
-  --ring: #06b6d4;
-  --ring-offset: #0d1117;
+  --ring: #ffffff;
+  --ring-offset: #000000;
+
+  --sidebar: #050505;
+  --sidebar-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.14);
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #000000;
+  --sidebar-ring: #ffffff;
   
   /* Severity colors - Dark mode */
   --severity-critical: #f87171;
@@ -214,6 +226,12 @@
   --color-input-background: var(--input-background);
   --color-ring: var(--ring);
   --color-ring-offset: var(--ring-offset);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-ring: var(--sidebar-ring);
   
   --color-severity-critical: var(--severity-critical);
   --color-severity-critical-bg: var(--severity-critical-bg);
@@ -311,4 +329,27 @@
   code, pre {
     font-family: var(--font-mono);
   }
+}
+
+@keyframes split-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(0.6em) scale(0.82) rotateX(38deg);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-0.08em) scale(1.06) rotateX(0deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotateX(0deg);
+  }
+}
+
+.split-pop-letter {
+  display: inline-block;
+  opacity: 0;
+  transform-origin: bottom center;
+  animation: split-pop 620ms cubic-bezier(0.2, 0.95, 0.2, 1.15) forwards;
+  will-change: transform, opacity;
 }

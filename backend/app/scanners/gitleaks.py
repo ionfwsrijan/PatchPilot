@@ -10,7 +10,7 @@ from ..utils.exec import run_cmd
 from ..utils.ml_features import extract_features
 
 
-def run_gitleaks(repo_dir: Path) -> List[Finding]:
+def run_gitleaks(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
     cmd = [
         "gitleaks",
         "detect",
@@ -36,6 +36,11 @@ def run_gitleaks(repo_dir: Path) -> List[Finding]:
                 )
             ]
         return []
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
 
     try:
         data = json.loads(report.read_text(encoding="utf-8") or "[]")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import random
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +21,7 @@ import aiosqlite
 import httpx
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     Form,
@@ -32,21 +35,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
-from app.ml.ranker import load_ranker, scoring_function
-
 from .db import (
+    create_findings,
+    create_job,
+    delete_job,
     get_cwe_distribution,
     get_db,
     get_dependency_diff,
+    get_finding,
+    get_findings_by_job_id,
+    get_job,
     get_leaderboard_stats,
     get_trend_data,
     init_db,
+    update_finding_status,
+    update_job_status,
     upsert_contributor_stat,
 )
+from .ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+from .ml.fp_predictor import predictor
+from .ml.ranker import load_ranker, scoring_function
 from .models import (
     Finding,
     FindingStatusUpdate,
+    Fix,
     FixRequest,
     FixResponse,
     Location,
@@ -64,7 +76,8 @@ from .scanners.entropy import run_entropy
 from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
-from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
+from .security import verify_api_key
+from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
@@ -115,6 +128,8 @@ ensure_dir(WORK_ROOT)
 @app.on_event("startup")
 async def startup():
     await init_db()
+    # Start background cleanup for finished ACTIVE_SCANS entries
+    asyncio.create_task(_cleanup_active_scans_loop())
 
 
 @app.get("/health")
@@ -132,6 +147,42 @@ def health():
         "status": "healthy" if healthy else "degraded",
         "scanners": scanners,
     }
+
+
+@app.get("/api/health/ollama", tags=["Health"])
+async def ollama_health():
+    """
+    Ping the local Ollama service to verify availability and list installed models.
+    Fails gracefully to prevent 500 errors if the service is down.
+    """
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    timeout = httpx.Timeout(3.0)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{base_url}/api/tags")
+
+            if response.status_code == 200:
+                data = response.json()
+                models = [model.get("name") for model in data.get("models", [])]
+                return {
+                    "available": True,
+                    "models": models,
+                    "base_url": base_url,
+                }
+            else:
+                return {
+                    "available": False,
+                    "models": [],
+                    "base_url": base_url,
+                }
+    except (httpx.RequestError, ValueError, AttributeError, TypeError) as e:
+        logger.warning(f"Ollama health check failed: {e}")
+        return {
+            "available": False,
+            "models": [],
+            "base_url": base_url,
+        }
 
 
 def _prioritize_findings(findings: List[Finding]) -> List[Finding]:
@@ -186,33 +237,74 @@ def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
     return deps
 
 
-ACTIVE_SCANS = {}
+ACTIVE_SCANS: dict[str, dict] = {}
+ORG_CANCEL_EVENTS = {}
+
+# How long to keep completed/failed scan progress in memory for SSE clients.
+# After this TTL, entries are removed to prevent unbounded growth.
+_ACTIVE_SCANS_RETENTION_SECONDS_RAW = os.environ.get("ACTIVE_SCANS_RETENTION_SECONDS")
+try:
+    ACTIVE_SCANS_RETENTION_SECONDS = (
+        int(_ACTIVE_SCANS_RETENTION_SECONDS_RAW)
+        if _ACTIVE_SCANS_RETENTION_SECONDS_RAW
+        else 600
+    )
+except ValueError:
+    ACTIVE_SCANS_RETENTION_SECONDS = 600
+
+ACTIVE_SCANS_RETENTION_SECONDS = max(1, ACTIVE_SCANS_RETENTION_SECONDS)
 
 
-def _scan_repo_dir(repo_dir: Path, progress_cb=None):
+def _scan_repo_dir(
+    repo_dir: Path,
+    progress_cb=None,
+    job_dir: Path = None,
+    cancel_event: threading.Event = None,
+    raw_dir_name: str = "raw",
+):
+    if cancel_event and cancel_event.is_set():
+        raise asyncio.CancelledError()
     if progress_cb:
         progress_cb("sast", "in_progress")
-    semgrep = run_semgrep(repo_dir)
+
+    semgrep_raw_out = (job_dir / raw_dir_name / "semgrep.json") if job_dir else None
+    semgrep = run_semgrep(repo_dir, raw_out=semgrep_raw_out)
+
+    if cancel_event and cancel_event.is_set():
+        raise asyncio.CancelledError()
+
     if progress_cb:
         progress_cb("sast", "completed")
 
     if progress_cb:
         progress_cb("dependency", "in_progress")
-    osv = run_osv_scanner(repo_dir)
+
+    osv_raw_out = (job_dir / raw_dir_name / "osv.json") if job_dir else None
+    osv = run_osv_scanner(repo_dir, raw_out=osv_raw_out)
+
+    if cancel_event and cancel_event.is_set():
+        raise asyncio.CancelledError()
+
     if progress_cb:
         progress_cb("dependency", "completed")
 
     if progress_cb:
         progress_cb("secrets", "in_progress")
-    gitleaks = run_gitleaks(repo_dir)
+
+    gitleaks_raw_out = (job_dir / raw_dir_name / "gitleaks.json") if job_dir else None
+    gitleaks = run_gitleaks(repo_dir, raw_out=gitleaks_raw_out)
+
+    if cancel_event and cancel_event.is_set():
+        raise asyncio.CancelledError()
+
     if progress_cb:
         progress_cb("secrets", "completed")
 
-    entropy = run_entropy(repo_dir)
-
-    findings: List[Finding] = []
+    findings = []
     findings.extend(semgrep)
     findings.extend(osv)
+    entropy = run_entropy(repo_dir)
+
     findings.extend(gitleaks)
     findings.extend(entropy)
 
@@ -229,7 +321,42 @@ def _scan_repo_dir(repo_dir: Path, progress_cb=None):
     return semgrep, osv, gitleaks, entropy, findings
 
 
+async def _cleanup_active_scans_loop() -> None:
+    """Periodically remove finished scan entries from ACTIVE_SCANS.
+
+    This prevents unbounded memory growth in long-running deployments.
+    """
+    while True:
+        try:
+            cutoff = (
+                datetime.now(timezone.utc).timestamp() - ACTIVE_SCANS_RETENTION_SECONDS
+            )
+            # Copy keys to avoid mutating while iterating.
+            for job_id in list(ACTIVE_SCANS.keys()):
+                state = ACTIVE_SCANS.get(job_id)
+                if not state:
+                    continue
+                status = state.get("status")
+                if status not in {"completed", "failed", "aborted"}:
+                    continue
+
+                finished_at = state.get("finished_at")
+                if finished_at is None:
+                    # If finished_at is missing, keep entry for safety.
+                    continue
+
+                if finished_at <= cutoff:
+                    ACTIVE_SCANS.pop(job_id, None)
+        except Exception:
+            logger.exception("ACTIVE_SCANS cleanup loop error")
+        await asyncio.sleep(30)
+
+
 def finding_key(f: Finding):
+    """Generate a stable identifier for a finding.
+    Uses rule identifier, file path, and start line so that findings from the
+    same rule on different lines are treated as distinct findings.
+    """
     metadata = f.metadata or {}
 
     rule_id = (
@@ -271,7 +398,12 @@ ALLOWED_REDIRECT_HOSTS = {
 MAX_REDIRECTS = 5
 
 
-async def download_to_path(url: str, dest_path: Path, max_retries: int = 5) -> None:
+async def download_to_path(
+    url: str,
+    dest_path: Path,
+    max_retries: int = 5,
+    cancel_event: threading.Event = None,
+) -> None:
     """
     Download *url* to *dest_path*, following redirects only to hosts in
     ALLOWED_REDIRECT_HOSTS. Implements exponential backoff for GitHub rate limits.
@@ -317,16 +449,23 @@ async def download_to_path(url: str, dest_path: Path, max_retries: int = 5) -> N
                         bytes_received = 0
                         chunk_size = 1024 * 1024
 
-                        with open(dest_path, "wb") as f:
-                            async for chunk in r.aiter_bytes(chunk_size=chunk_size):
-                                bytes_received += len(chunk)
-                                if bytes_received > MAX_UPLOAD_SIZE:
-                                    dest_path.unlink(missing_ok=True)
-                                    raise HTTPException(
-                                        status_code=413,
-                                        detail=f"Remote repository exceeds the maximum limit of {MAX_UPLOAD_MB}MB.",
-                                    )
-                                f.write(chunk)
+                        try:
+                            with open(dest_path, "wb") as f:
+                                async for chunk in r.aiter_bytes(chunk_size=chunk_size):
+                                    bytes_received += len(chunk)
+                                    if bytes_received > MAX_UPLOAD_SIZE:
+                                        raise HTTPException(
+                                            status_code=413,
+                                            detail=f"Remote repository exceeds the maximum limit of {MAX_UPLOAD_MB}MB.",
+                                        )
+                                    f.write(chunk)
+                        except Exception:
+                            try:
+                                if dest_path.exists():
+                                    dest_path.unlink()
+                            except Exception:
+                                pass
+                            raise
                         return
 
                 if status_code_for_retry in (403, 429):
@@ -355,6 +494,30 @@ async def download_to_path(url: str, dest_path: Path, max_retries: int = 5) -> N
                     )
                 jitter = random.uniform(0.5, 1.5)
                 await asyncio.sleep((base_delay * (2**attempt)) + jitter)
+
+
+async def _apply_fp_predictor(findings: List[Finding]) -> None:
+    ml_input = []
+    for f in findings:
+        rule_id = (
+            (f.metadata or {}).get("check_id")
+            or (f.metadata or {}).get("rule")
+            or (f.metadata or {}).get("osv_id")
+            or f.title
+        )
+        ml_input.append(
+            {
+                "rule_id": rule_id,
+                "message": f.description or f.title,
+                "file_path": f.location.path if f.location else "",
+                "ml_score": getattr(f, "ml_score", 1.0),
+            }
+        )
+
+    adjusted_scores = await run_in_threadpool(predictor.adjust_scores, ml_input)
+
+    for f, new_score in zip(findings, adjusted_scores):
+        f.ml_score = new_score
 
 
 def _maybe_use_single_top_folder(repo_dir: Path) -> Path:
@@ -391,16 +554,15 @@ async def _run_single_scan_task(
     try:
         db = await get_db()
         try:
-            await db.execute(
-                "INSERT INTO jobs (job_id, project_name, scan_method) VALUES (?, ?, ?)",
-                (job_id, project_name, scan_method),
-            )
-            await db.commit()
+            await create_job(db, job_id, project_name, scan_method)
         finally:
             await db.close()
 
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
         semgrep, osv, gitleaks, entropy, findings = await run_in_threadpool(
-            _scan_repo_dir, scan_root, update_progress
+            functools.partial(
+                _scan_repo_dir, scan_root, update_progress, job_dir=job_dir
+            )
         )
 
         raw_finding_count = len(findings)
@@ -425,6 +587,8 @@ async def _run_single_scan_task(
 
         if not disable_dedup and SENTENCE_TRANSFORMERS_AVAILABLE:
             findings = deduplicate(findings, epsilon)
+
+        await _apply_fp_predictor(findings)
 
         finding_count = len(findings)
 
@@ -451,6 +615,7 @@ async def _run_single_scan_task(
                         str(uuid.uuid4()),
                         job_id,
                         rule_id,
+                        f.title,
                         f.severity,
                         f.category,
                         file_path,
@@ -461,18 +626,14 @@ async def _run_single_scan_task(
                         pkg_name,
                         pkg_version,
                         f.ml_score,
+                        json.dumps(f.features) if f.features else None,
                     )
                 )
             if rows:
-                await db.executemany(
-                    "INSERT INTO findings (id, job_id, rule_id, severity, category, file_path, line_number, cwe, scanner, message, package_name, package_version, ml_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
-            await db.execute(
-                "UPDATE jobs SET status = 'completed', raw_finding_count = ?, finding_count = ? WHERE job_id = ?",
-                (raw_finding_count, finding_count, job_id),
+                await create_findings(db, rows)
+            await update_job_status(
+                db, job_id, "completed", raw_finding_count, finding_count
             )
-            await db.commit()
         finally:
             await db.close()
 
@@ -480,31 +641,63 @@ async def _run_single_scan_task(
             ACTIVE_SCANS[job_id]["status"] = "completed"
             ACTIVE_SCANS[job_id]["findings_count"] = finding_count
             ACTIVE_SCANS[job_id]["policy"] = policy_result
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
     except Exception:
         logger.exception("Failed scan task for %s", job_id)
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "failed"
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
         try:
             db = await get_db()
             try:
-                await db.execute(
-                    "UPDATE jobs SET status = 'failed' WHERE job_id = ?", (job_id,)
-                )
-                await db.commit()
+                await update_job_status(db, job_id, "failed")
             finally:
                 await db.close()
         except Exception:
             logger.exception("Failed to write failed status for job %s", job_id)
 
 
-@app.post("/scan")
+@app.post(
+    "/scan",
+    summary="Scan an uploaded project archive",
+    description=(
+        "Uploads a ZIP archive containing a project, extracts it, "
+        "and starts an asynchronous security scan. "
+        "The endpoint immediately returns a job ID that can be used "
+        "to monitor scan progress and retrieve results."
+    ),
+    response_model=dict,
+    responses={
+        400: {"description": "Invalid ZIP archive or upload error."},
+        413: {"description": "Uploaded file exceeds the maximum allowed size."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
     project: UploadFile = File(...),
     policy: UploadFile | None = File(None),
     project_name: str = Form("project"),
+    project: UploadFile = File(
+        ...,
+        description="ZIP archive containing the project source code to scan.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name assigned to the uploaded project.",
+    ),
 ):
+    """
+    Upload a project archive and start an asynchronous security scan.
+
+    The uploaded ZIP file is extracted into a temporary workspace,
+    validated, and queued for background scanning. The endpoint
+    returns immediately with a unique job ID that can be used to
+    track scan progress and retrieve scan results.
+    """
     content_length = request.headers.get("content-length")
     try:
         content_length = int(content_length) if content_length else None
@@ -564,13 +757,45 @@ async def scan(
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
 
-@app.post("/scan-url")
+@app.post(
+    "/scan-url",
+    summary="Scan a GitHub repository",
+    description=(
+        "Downloads a GitHub repository as a ZIP archive using the "
+        "specified repository URL and branch, then starts an "
+        "asynchronous security scan. Returns a job ID for tracking "
+        "the scan progress and results."
+    ),
+    responses={
+        400: {"description": "Invalid repository URL or repository download failed."},
+        404: {"description": "Repository or branch not found."},
+        429: {"description": "GitHub API rate limit exceeded."},
+        500: {"description": "Internal server error."},
+    },
+)
 async def scan_url(
     background_tasks: BackgroundTasks,
-    repo_url: str = Form(...),
-    ref: str = Form("main"),
-    project_name: str = Form("project"),
+    repo_url: str = Form(
+        ...,
+        description="Public GitHub repository URL to scan.",
+    ),
+    ref: str = Form(
+        "main",
+        description="Git branch to download and scan.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name assigned to this scan.",
+    ),
 ):
+    """
+    Download a GitHub repository and start an asynchronous security scan.
+
+    The repository is downloaded as a ZIP archive, extracted into a
+    temporary workspace, and queued for background scanning. A job ID
+    is returned immediately for tracking scan progress and retrieving
+    results.
+    """
     job_id = next(tempfile._get_candidate_names())
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
@@ -612,15 +837,98 @@ async def stream_single_scan_status(job_id: str):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.post("/fix", response_model=FixResponse)
-def fix(req: FixRequest):
-    job_dir = WORK_ROOT / req.job_id
+async def _record_fixes_to_db(job_id: str, fixes: List[Fix]):
+    try:
+        db = await get_db()
+        try:
+            rows = []
+            for f in fixes:
+                if not f.diff:
+                    continue
+                diff_str = f.diff
+                adds = 0
+                dels = 0
+                for line in diff_str.split("\n"):
+                    if line.startswith("+") and not line.startswith("+++"):
+                        adds += 1
+                    elif line.startswith("-") and not line.startswith("---"):
+                        dels += 1
+
+                diff_line_count = adds + dels
+                files = f.files_changed
+                diff_file_count = len(files) if files else 0
+
+                if adds == 0 and dels == 0:
+                    fix_type = "none"
+                elif adds > 0 and dels == 0:
+                    fix_type = "insert"
+                elif dels > 0 and adds == 0:
+                    fix_type = "delete"
+                else:
+                    fix_type = "mixed"
+
+                rows.append(
+                    (
+                        str(uuid.uuid4()),
+                        job_id,
+                        f.finding_id,
+                        diff_line_count,
+                        diff_file_count,
+                        fix_type,
+                    )
+                )
+            if rows:
+                await db.executemany(
+                    "INSERT INTO fixes "
+                    "(id, job_id, finding_id, diff_line_count, "
+                    "diff_file_count, fix_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                await db.commit()
+        finally:
+            await db.close()
+    except Exception:
+        logger.exception("Failed to record fixes to DB for job %s", job_id)
+
+
+@app.post(
+    "/fix",
+    response_model=FixResponse,
+    summary="Generate remediation suggestions",
+    description=(
+        "Generates automated fix suggestions for one or more selected "
+        "security findings within a previously scanned project. "
+        "The generated fixes are returned to the client and recorded "
+        "asynchronously for reporting purposes."
+    ),
+    responses={
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request payload."},
+        500: {"description": "Internal server error."},
+    },
+)
+def fix(req: FixRequest, background_tasks: BackgroundTasks):
+    """
+    Generate remediation suggestions for selected findings.
+
+    Uses the specified job ID and finding IDs to produce proposed
+    fixes for detected security issues. Generated fixes are returned
+    immediately and stored asynchronously for later reporting.
+    """
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, req.job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
     fixes = propose_fixes(repo_dir, req.finding_ids)
+
+    background_tasks.add_task(_record_fixes_to_db, req.job_id, fixes)
 
     return FixResponse(job_id=req.job_id, fixes=fixes)
 
@@ -630,7 +938,7 @@ async def get_baseline_findings(job_id: str):
     try:
         cursor = await db.execute(
             """
-            SELECT rule_id, file_path, line_number
+            SELECT rule_id, file_path
             FROM findings
             WHERE job_id = ?
             """,
@@ -638,21 +946,52 @@ async def get_baseline_findings(job_id: str):
         )
         rows = await cursor.fetchall()
 
-        return {
-            (
-                row[0],
-                row[1],
-                row[2],
-            )
-            for row in rows
-        }
+        return {(row[0], row[1]) for row in rows}
     finally:
         await db.close()
 
 
-@app.post("/verify", response_model=VerifyResponse)
-async def verify(job_id: str = Form(...)):
-    job_dir = WORK_ROOT / job_id
+@app.post(
+    "/verify",
+    response_model=VerifyResponse,
+    summary="Verify repository fixes",
+    description=(
+        "Verifies whether the applied fixes successfully resolve the "
+        "detected security issues. The repository is rescanned and "
+        "compared against the baseline scan to identify any newly "
+        "introduced issues."
+    ),
+    responses={
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request parameters."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def verify(
+    job_id: str = Form(
+        ...,
+        description="Identifier of the scan job to verify.",
+    ),
+    baseline_job_id: str | None = Form(
+        None,
+        description=(
+            "Optional baseline scan job ID used for comparison. "
+            "If omitted, the current job is used as the baseline."
+        ),
+    ),
+):
+    """
+    Verify that applied fixes resolve previously detected security issues.
+
+    The repository is rescanned and compared with a baseline scan to
+    determine whether fixes were successful and whether any new
+    vulnerabilities were introduced.
+    """
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
@@ -661,9 +1000,18 @@ async def verify(job_id: str = Form(...)):
 
     result = verify_repo(repo_dir)
 
-    baseline_findings = await get_baseline_findings(job_id)
+    if baseline_job_id is not None:
+        try:
+            safe_job_dir(WORK_ROOT, baseline_job_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    _, _, _, _, findings = _scan_repo_dir(repo_dir)
+    baseline_job_id = baseline_job_id or job_id
+    baseline_findings = await get_baseline_findings(baseline_job_id)
+
+    _, _, _, _, findings = _scan_repo_dir(
+        repo_dir, job_dir=job_dir, raw_dir_name="raw_verify"
+    )
 
     current_findings = {finding_key(f) for f in findings}
 
@@ -677,6 +1025,19 @@ async def verify(job_id: str = Form(...)):
     )
 
     passed = 1 if result.ok and new_issues_introduced == 0 else 0
+
+    verify_dir = job_dir / "raw_verify"
+    verify_dir.mkdir(parents=True, exist_ok=True)
+    verify_report = {
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "passed": bool(passed),
+        "new_issues_introduced": new_issues_introduced,
+        "baseline_job_id": baseline_job_id,
+    }
+    (verify_dir / "verification-report.json").write_text(
+        json.dumps(verify_report, indent=2), encoding="utf-8"
+    )
+
     try:
         db = await get_db()
         try:
@@ -701,73 +1062,109 @@ async def verify(job_id: str = Form(...)):
     return result
 
 
-@app.post("/evidence-pack")
-def evidence_pack(job_id: str = Form(...), project_name: str = Form("project")):
-    job_dir = WORK_ROOT / job_id
+@app.post(
+    "/evidence-pack",
+    summary="Generate an evidence package",
+    description=(
+        "Generates a downloadable evidence package containing scan "
+        "artifacts, reports, and supporting files for a completed "
+        "security scan. Optionally refreshes the raw scan outputs "
+        "before creating the evidence package."
+    ),
+    responses={
+        200: {"description": "Evidence package generated successfully."},
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request parameters."},
+        500: {"description": "Internal server error."},
+    },
+)
+def evidence_pack(
+    job_id: str = Form(
+        ...,
+        description="Identifier of the scan job for which the evidence package should be generated.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name of the project included in the generated reports.",
+    ),
+    update_raw: bool = Form(
+        False,
+        description="If true, refreshes the raw scan results before generating the evidence package.",
+    ),
+):
+    """
+    Generate a downloadable evidence package for a completed scan.
+
+    The evidence package includes reports, raw scanner outputs, and
+    supporting artifacts that can be used for auditing, compliance,
+    or sharing scan results.
+    """
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
 
+    if update_raw:
+        verify_dir = job_dir / "raw_verify"
+        if verify_dir.exists():
+            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw_verify")
+        else:
+            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw")
+
     out_dir = job_dir / "out"
     ensure_dir(out_dir)
 
     pack_path = build_evidence_pack(
-        repo_dir=repo_dir, out_dir=out_dir, project_name=project_name, job_id=job_id
+        repo_dir=repo_dir,
+        out_dir=out_dir,
+        project_name=project_name,
+        job_id=job_id,
+        job_dir=job_dir,
     )
     return FileResponse(
         path=str(pack_path), filename=pack_path.name, media_type="application/zip"
     )
 
 
-@app.get("/api/scans/{job_id}/report/pdf", tags=["Reports"])
+@app.get(
+    "/api/scans/{job_id}/report/pdf",
+    tags=["Reports"],
+    dependencies=[Depends(verify_api_key)],
+)
 async def download_audit_pdf(job_id: str):
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT project_name FROM jobs WHERE job_id = ?", (job_id,)
-        )
-        job_row = await cur.fetchone()
-
+        job_row = await get_job(db, job_id)
         if job_row is None:
             raise HTTPException(
                 status_code=404, detail=f"No job found with id '{job_id}'"
             )
 
-        project_name = job_row[0]
-
-        cur = await db.execute(
-            """
-            SELECT id, rule_id, severity, category, file_path, line_number, message
-            FROM findings
-            WHERE job_id = ?
-            """,
-            (job_id,),
-        )
-        columns = [col[0] for col in cur.description]
-        rows = await cur.fetchall()
+        project_name = job_row["project_name"]
+        rows = await get_findings_by_job_id(db, job_id)
     finally:
         await db.close()
 
     findings_list = []
     for row in rows:
-        row_dict = dict(zip(columns, row))
-
         loc = None
-        if row_dict["file_path"]:
-            loc = Location(
-                path=row_dict["file_path"], start_line=row_dict["line_number"]
-            )
+        if row["file_path"]:
+            loc = Location(path=row["file_path"], start_line=row["line_number"])
 
         findings_list.append(
             Finding(
-                id=row_dict["id"],
-                title=row_dict["rule_id"] or "Unknown",
-                severity=row_dict["severity"] or "INFO",
-                category=row_dict["category"] or "Unknown",
+                id=row["id"],
+                title=row.get("title") or row.get("rule_id") or "Unknown",
+                severity=row.get("severity") or "INFO",
+                category=row.get("category") or "Unknown",
                 location=loc,
-                description=row_dict["message"] or "",
+                description=row.get("message") or "",
             )
         )
 
@@ -790,55 +1187,25 @@ async def download_audit_pdf(job_id: str):
     )
 
 
-@app.get("/jobs/{job_id}/findings")
+@app.get(
+    "/jobs/{job_id}/findings",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_findings(job_id: str):
     db = await get_db()
     try:
-        cur = await db.execute(
-            "SELECT job_id, raw_finding_count, finding_count FROM jobs WHERE job_id = ?",
-            (job_id,),
-        )
-        job_row = await cur.fetchone()
-
+        job_row = await get_job(db, job_id)
         if job_row is None:
             raise HTTPException(
                 status_code=404, detail=f"No job found with id '{job_id}'"
             )
 
-        raw_finding_count = None
-        finding_count = None
-        if job_row is not None:
-            if hasattr(job_row, "keys") or isinstance(job_row, dict):
-                try:
-                    raw_finding_count = job_row["raw_finding_count"]
-                except (KeyError, IndexError):
-                    pass
-                try:
-                    finding_count = job_row["finding_count"]
-                except (KeyError, IndexError):
-                    pass
-            else:
-                if len(job_row) > 1:
-                    raw_finding_count = job_row[1]
-                if len(job_row) > 2:
-                    finding_count = job_row[2]
+        raw_finding_count = job_row.get("raw_finding_count")
+        finding_count = job_row.get("finding_count")
 
-        cur = await db.execute(
-            """
-            SELECT id, rule_id, severity, category, file_path,
-                   line_number, cwe, scanner, message, package_name, package_version, created_at, ml_score
-            FROM findings
-            WHERE job_id = ?
-            ORDER BY created_at
-            """,
-            (job_id,),
-        )
-        columns = [col[0] for col in cur.description]
-        rows = await cur.fetchall()
+        findings = await get_findings_by_job_id(db, job_id)
     finally:
         await db.close()
-
-    findings = [dict(zip(columns, row)) for row in rows]
 
     if raw_finding_count is None:
         raw_finding_count = len(findings)
@@ -853,8 +1220,51 @@ async def get_findings(job_id: str):
     }
 
 
+class LabelFindingRequest(BaseModel):
+    false_positive: bool
+    expected_version: int
+
+
+@app.post("/findings/{finding_id}/label")
+async def label_finding(finding_id: str, payload: LabelFindingRequest):
+    fp_int = 1 if payload.false_positive else 0
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """
+            UPDATE findings
+            SET false_positive = ?, labeled_at = datetime('now'), version = version + 1
+            WHERE id = ? AND version = ?
+            """,
+            (fp_int, finding_id, payload.expected_version),
+        )
+
+        if cursor.rowcount == 0:
+            # Distinguish between a missing finding (404) and a stale version (409)
+            cur2 = await db.execute(
+                "SELECT id FROM findings WHERE id = ?", (finding_id,)
+            )
+            if not await cur2.fetchone():
+                raise HTTPException(status_code=404, detail="Finding not found")
+            raise HTTPException(
+                status_code=409,
+                detail="Finding has been modified by another user.",
+            )
+
+        await db.commit()
+    finally:
+        await db.close()
+
+    return {
+        "status": "success",
+        "finding_id": finding_id,
+        "false_positive": payload.false_positive,
+    }
+
+
 @app.patch("/findings/{finding_id}/status")
-async def update_finding_status(finding_id: str, payload: FindingStatusUpdate):
+async def update_finding_status_endpoint(finding_id: str, payload: FindingStatusUpdate):
     if payload.status not in ("open", "accepted", "ignored"):
         raise HTTPException(
             status_code=400,
@@ -863,42 +1273,26 @@ async def update_finding_status(finding_id: str, payload: FindingStatusUpdate):
 
     db = await get_db()
     try:
-        cur = await db.execute("SELECT id FROM findings WHERE id = ?", (finding_id,))
-        if not await cur.fetchone():
+        finding = await get_finding(db, finding_id)
+        if not finding:
             raise HTTPException(
                 status_code=404, detail=f"Finding '{finding_id}' not found."
             )
-        try:
-            await db.execute(
-                "UPDATE findings SET status = ? WHERE id = ?",
-                (payload.status, finding_id),
-            )
-            await db.commit()
-        except Exception as e:
-            if "no such column: status" in str(e).lower():
-                await db.execute(
-                    "ALTER TABLE findings ADD COLUMN status TEXT DEFAULT 'open'"
-                )
-                await db.execute(
-                    "UPDATE findings SET status = ? WHERE id = ?",
-                    (payload.status, finding_id),
-                )
-                await db.commit()
-            else:
-                raise e
+        await update_finding_status(db, finding_id, payload.status)
     finally:
         await db.close()
 
     return {"id": finding_id, "status": payload.status}
 
 
-@app.get("/jobs/{job_id}/verify")
+@app.get(
+    "/jobs/{job_id}/verify",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_verify(job_id: str):
     db = await get_db()
     try:
-        cur = await db.execute("SELECT job_id FROM jobs WHERE job_id = ?", (job_id,))
-        job_row = await cur.fetchone()
-
+        job_row = await get_job(db, job_id)
         if job_row is None:
             raise HTTPException(
                 status_code=404, detail=f"No job found with id '{job_id}'"
@@ -928,28 +1322,50 @@ async def get_verify(job_id: str):
 
 
 @app.delete("/jobs/{job_id}")
-def delete_job(job_id: str):
-    job_dir = WORK_ROOT / job_id
-    if job_dir.exists():
-        safe_rmtree(job_dir)
+async def delete_job_endpoint(job_id: str):
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    safe_rmtree(job_dir)
+
+    db = await get_db()
+    try:
+        await delete_job(db, job_id)
+    finally:
+        await db.close()
+
     return {"deleted": True}
 
 
-@app.get("/trends")
+@app.get(
+    "/trends",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_trends_endpoint(limit: int = 6):
     """Fetches historical trend data for the frontend dashboard."""
     data = await get_trend_data(limit)
     return data
 
 
-@app.get("/cwe-distribution")
+@app.get(
+    "/cwe-distribution",
+    dependencies=[Depends(verify_api_key)],
+)
 async def cwe_distribution_endpoint():
     """Fetches the vulnerability distribution for the frontend donut chart."""
     data = await get_cwe_distribution()
     return data
 
 
-@app.get("/dependency-diff")
+@app.get(
+    "/dependency-diff",
+    dependencies=[Depends(verify_api_key)],
+)
 async def dependency_diff_endpoint():
     data = await get_dependency_diff()
     return data
@@ -967,13 +1383,19 @@ class LeaderboardUpdateRequest(BaseModel):
     is_pr_merged: bool = False
 
 
-@app.get("/leaderboard")
+@app.get(
+    "/leaderboard",
+    dependencies=[Depends(verify_api_key)],
+)
 async def leaderboard_endpoint():
     data = await get_leaderboard_stats()
     return data
 
 
-@app.post("/leaderboard/update")
+@app.post(
+    "/leaderboard/update",
+    dependencies=[Depends(verify_api_key)],
+)
 async def update_leaderboard_endpoint(req: LeaderboardUpdateRequest):
     pattern = r"(?i)(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)"
     matches = re.findall(pattern, req.pr_description)
@@ -1027,9 +1449,12 @@ async def _run_repo_scan_task(
     ref: str,
     project_name: str,
     org_job_id: str,
+    cancel_event: threading.Event = None,
 ):
     async with sem:
         try:
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError()
             db = await get_db()
             try:
                 db.row_factory = aiosqlite.Row
@@ -1039,31 +1464,37 @@ async def _run_repo_scan_task(
                 org_row = await cur.fetchone()
 
                 if org_row and org_row["status"] == "aborted":
-                    await db.execute(
-                        "UPDATE jobs SET status = 'aborted' WHERE job_id = ?", (job_id,)
-                    )
-                    await db.commit()
+                    await update_job_status(db, job_id, "aborted")
                     return
 
-                await db.execute(
-                    "UPDATE jobs SET status = 'scanning' WHERE job_id = ?", (job_id,)
-                )
-                await db.commit()
+                await update_job_status(db, job_id, "scanning")
             finally:
                 await db.close()
 
-            job_dir = WORK_ROOT / job_id
+            job_dir = safe_job_dir(WORK_ROOT, job_id)
             ensure_dir(job_dir)
             archive_path = job_dir / "repo.zip"
             repo_dir = job_dir / "repo"
             ensure_dir(repo_dir)
 
             zip_url = github_zip_url(repo_url, ref=ref)
-            await download_to_path(zip_url, archive_path)
+            await download_to_path(zip_url, archive_path, cancel_event=cancel_event)
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError()
+
             unzip_to_dir(archive_path, repo_dir)
+            if cancel_event and cancel_event.is_set():
+                raise asyncio.CancelledError()
 
             scan_root = _maybe_use_single_top_folder(repo_dir)
-            semgrep, osv, gitleaks, entropy, findings = _scan_repo_dir(scan_root)
+            semgrep, osv, gitleaks, entropy, findings = await run_in_threadpool(
+                functools.partial(
+                    _scan_repo_dir,
+                    scan_root,
+                    job_dir=job_dir,
+                    cancel_event=cancel_event,
+                )
+            )
 
             raw_finding_count = len(findings)
 
@@ -1075,6 +1506,8 @@ async def _run_repo_scan_task(
 
             if not disable_dedup and SENTENCE_TRANSFORMERS_AVAILABLE:
                 findings = deduplicate(findings, epsilon)
+
+            await _apply_fp_predictor(findings)
 
             finding_count = len(findings)
 
@@ -1104,6 +1537,7 @@ async def _run_repo_scan_task(
                             str(uuid.uuid4()),
                             job_id,
                             rule_id,
+                            f.title,
                             f.severity,
                             f.category,
                             file_path,
@@ -1114,14 +1548,12 @@ async def _run_repo_scan_task(
                             pkg_name,
                             pkg_version,
                             f.ml_score,
+                            json.dumps(f.features) if f.features else None,
                         )
                     )
 
                 if rows:
-                    await db.executemany(
-                        "INSERT INTO findings (id, job_id, rule_id, severity, category, file_path, line_number, cwe, scanner, message, package_name, package_version, ml_score) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        rows,
-                    )
+                    await create_findings(db, rows)
 
                 dep_rows = []
                 for pkg_n, pkg_v in deps:
@@ -1135,28 +1567,37 @@ async def _run_repo_scan_task(
                         dep_rows,
                     )
 
-                await db.execute(
-                    "UPDATE jobs SET status = 'completed', raw_finding_count = ?, finding_count = ? WHERE job_id = ?",
-                    (raw_finding_count, finding_count, job_id),
+                await update_job_status(
+                    db, job_id, "completed", raw_finding_count, finding_count
                 )
-                await db.commit()
             finally:
                 await db.close()
+        except asyncio.CancelledError:
+            logger.info("Scan task %s was aborted", job_id)
+            # No database write here
         except Exception:
             logger.exception("Failed repo scan task for job %s", job_id)
             db = await get_db()
             try:
-                await db.execute(
-                    "UPDATE jobs SET status = 'failed' WHERE job_id = ?", (job_id,)
-                )
-                await db.commit()
+                await update_job_status(db, job_id, "failed")
             finally:
                 await db.close()
 
 
 async def _run_org_batch(org_job_id: str, repos: List[dict]):
+    cancel_event = threading.Event()
+    ORG_CANCEL_EVENTS[org_job_id] = cancel_event
+
     db = await get_db()
     try:
+        cur = await db.execute(
+            "SELECT status FROM org_jobs WHERE id = ?", (org_job_id,)
+        )
+        row = await cur.fetchone()
+        if row and row[0] == "aborted":
+            ORG_CANCEL_EVENTS.pop(org_job_id, None)
+            return
+
         await db.execute(
             "UPDATE org_jobs SET status = 'scanning' WHERE id = ?", (org_job_id,)
         )
@@ -1175,19 +1616,48 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
 
         db = await get_db()
         try:
-            await db.execute(
-                "INSERT INTO jobs (job_id, project_name, scan_method, org_job_id, status) VALUES (?, ?, ?, ?, ?)",
-                (job_id, project_name, "org_batch", org_job_id, "pending"),
+            await create_job(
+                db, job_id, project_name, "org_batch", org_job_id, "pending"
             )
-            await db.commit()
         finally:
             await db.close()
 
         tasks.append(
-            _run_repo_scan_task(sem, job_id, repo_url, ref, project_name, org_job_id)
+            asyncio.create_task(
+                _run_repo_scan_task(
+                    sem, job_id, repo_url, ref, project_name, org_job_id, cancel_event
+                )
+            )
         )
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    cancel_task = asyncio.create_task(asyncio.to_thread(cancel_event.wait))
+    wait_tasks = asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
+
+    try:
+        done, pending = await asyncio.wait(
+            [wait_tasks, cancel_task], return_when=asyncio.FIRST_COMPLETED
+        )
+
+        if cancel_task in done:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            db = await get_db()
+            try:
+                await db.execute(
+                    "UPDATE jobs SET status = 'aborted' WHERE org_job_id = ? AND status NOT IN ('completed', 'failed')",
+                    (org_job_id,),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+        else:
+            cancel_task.cancel()
+    finally:
+        cancel_task.cancel()
+        ORG_CANCEL_EVENTS.pop(org_job_id, None)
 
     db = await get_db()
     try:
@@ -1205,7 +1675,10 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
         await db.close()
 
 
-@app.post("/api/scans/org")
+@app.post(
+    "/api/scans/org",
+    dependencies=[Depends(verify_api_key)],
+)
 async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     m = re.match(
         r"^https?://github\.com/([^/]+)/?$", req.org_url.strip(), re.IGNORECASE
@@ -1237,7 +1710,11 @@ async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     return {"org_job_id": org_job_id, "org_name": org_name, "repo_count": len(repos)}
 
 
-@app.get("/api/scans/org/{org_job_id}/status", response_model=OrgJobStatusResponse)
+@app.get(
+    "/api/scans/org/{org_job_id}/status",
+    response_model=OrgJobStatusResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_org_status(org_job_id: str):
     db = await get_db()
     try:
@@ -1271,6 +1748,9 @@ async def get_org_status(org_job_id: str):
 
 @app.post("/api/scans/org/{org_job_id}/abort")
 async def abort_org_scan(org_job_id: str, mode: str = Query("pending")):
+    if org_job_id in ORG_CANCEL_EVENTS:
+        ORG_CANCEL_EVENTS[org_job_id].set()
+
     for attempt in range(5):
         try:
             db = await get_db()
@@ -1342,13 +1822,8 @@ async def stream_org_status(org_job_id: str):
             }
 
             yield f"data: {json.dumps(payload)}\n\n"
-            if org_row["status"] in ["completed", "failed"]:
+            if org_row["status"] in ["completed", "failed", "aborted"]:
                 break
-
-            if org_row["status"] == "aborted":
-                is_scanning = any(r["status"] == "scanning" for r in job_rows)
-                if not is_scanning:
-                    break
 
             await asyncio.sleep(1.5)
 

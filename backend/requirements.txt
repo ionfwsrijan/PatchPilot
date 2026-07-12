@@ -10,3 +10,5 @@ pandas
 scikit-learn
 starlette<1.0.0
 PyYAML==6.0.2
+sentence-transformers
+numpy

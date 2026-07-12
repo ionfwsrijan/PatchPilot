@@ -12,12 +12,17 @@ from ..utils.ml_features import extract_features
 SEMGREP_CONFIGS = ["p/ci", "p/dockerfile", "p/terraform", "p/github-actions"]
 
 
-def run_semgrep(repo_dir: Path) -> List[Finding]:
+def run_semgrep(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
     cmd = ["semgrep"]
     for conf in SEMGREP_CONFIGS:
         cmd.extend(["--config", conf])
     cmd.extend(["--json", "--quiet"])
     r = run_cmd(cmd, cwd=repo_dir, timeout_s=600)
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(r.get("stdout", ""), encoding="utf-8")
 
     if r["returncode"] not in (0, 1):
         return [

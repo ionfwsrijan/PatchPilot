@@ -101,7 +101,7 @@ export function OrgFindings() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/")} className="cursor-pointer">
+          <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")} className="cursor-pointer">
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>

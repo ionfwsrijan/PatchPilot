@@ -1,0 +1,96 @@
+name: Greet Contributors
+
+on:
+  issues:
+    types:
+      - opened
+
+  pull_request_target:
+    types:
+      - opened
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  greet-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Welcome Issue Creator
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const user = context.payload.issue.user.login;
+            const issueNumber = context.payload.issue.number;
+
+            const message = `
+            👋 Welcome @${user}!
+
+            Thank you for opening an issue and contributing to Patchpilot. 🚀
+
+            ### Next Steps
+            - Please ensure you've provided all the required details.
+            - A maintainer will review your issue shortly.
+            - Feel free to ask questions if anything is unclear.
+
+            ⚡ **Want faster assignment and quicker responses?**
+
+            Join our Discord community:
+
+            🔗 https://discord.gg/FcXuyw2Rs
+
+            We actively discuss issues, features, roadmap updates, and contributor support there.
+
+            Happy Contributing! 🎉
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: message
+            });
+
+  greet-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Welcome PR Author
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const user = context.payload.pull_request.user.login;
+            const prNumber = context.payload.pull_request.number;
+
+            const message = `
+            🎉 Thank you @${user} for submitting a Pull Request!
+
+            We're excited to review your contribution.
+
+            ### Before Review
+            ✅ Ensure all CI checks pass
+            ✅ Complete the PR template
+            ✅ Link the related issue
+
+            ⚡ **Want faster reviews and contributor support?**
+
+            Join our Discord community:
+
+            🔗 https://discord.gg/FcXuyw2Rs
+
+
+            Maintainers and mentors are active there and can help resolve blockers quickly.
+
+            Happy Contributing! 🚀
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: message
+            });

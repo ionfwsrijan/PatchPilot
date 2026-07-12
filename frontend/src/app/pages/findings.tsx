@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   Search,
   Filter,
@@ -8,6 +8,10 @@ import {
   XCircle,
   Loader2,
   AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { downloadAuditReport } from "../lib/api";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -42,7 +46,9 @@ import { CodeBlock } from "../components/code-block";
 import { FilterChips } from "../components/filter-chips";
 import type { Finding } from "../data/sample-data";
 import { loadLastScan } from "../lib/scan-store";
-import { getJobFindings, updateFindingStatus } from "../lib/api";
+import { getJobFindings, updateFindingStatus, labelFinding } from "../lib/api";
+import { downloadFindingsAsCsv } from "../lib/csv-export";
+type UiFinding = Finding & { false_positive?: boolean | null, version?: number };
 import { mapBackendFindingToUi } from "../lib/mappers";
 import { cn } from "../components/ui/utils";
 
@@ -56,7 +62,7 @@ function ExportReportButton({ scanId }: { scanId: string }) {
 
     try {
       const { blob, filename } = await downloadAuditReport(scanId);
-      
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -141,7 +147,7 @@ export function Findings() {
   const navigate = useNavigate();
 
   const [scan, setScan] = useState<any>(null);
-  const [findings, setFindings] = useState<Finding[]>([]);
+  const [findings, setFindings] = useState<UiFinding[]>([]);
   const [isLoadingFindings, setIsLoadingFindings] = useState(true);
 
   useEffect(() => {
@@ -153,26 +159,78 @@ export function Findings() {
     setScan(storedScan);
     getJobFindings(storedScan.job_id)
       .then((response: any) => {
-        const actualFindings = Array.isArray(response) 
-          ? response 
+        const actualFindings = Array.isArray(response)
+          ? response
           : (response.findings || response.data || []);
-          
-        setFindings(actualFindings.map(mapBackendFindingToUi));
+
+        setFindings(actualFindings.map((bf: any) => ({
+          ...mapBackendFindingToUi(bf),
+          false_positive: bf.false_positive === 1 || bf.false_positive === true ? true : (bf.false_positive === 0 || bf.false_positive === false ? false : null)
+        })));
       })
       .catch((err) => console.error("Failed to fetch findings", err))
       .finally(() => setIsLoadingFindings(false));
   }, []);
 
   const [selectedFindings, setSelectedFindings] = useState<Set<string>>(new Set());
-  const [detailFinding, setDetailFinding] = useState<Finding | null>(null);
+  const [detailFinding, setDetailFinding] = useState<UiFinding | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [sortBy, setSortBy] = useState<"severity" | "ml_score">("severity");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50;
+  const abortControllers = useRef<Record<string, AbortController>>({});
+  const [labelingId, setLabelingId] = useState<string | null>(null);
+
+  const handleLabelFalsePositive = async (findingId: string, isFalsePositive: boolean, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+
+    if (abortControllers.current[findingId]) {
+      abortControllers.current[findingId].abort();
+    }
+    const controller = new AbortController();
+    abortControllers.current[findingId] = controller;
+
+    const previousFinding = findings.find(f => f.id === findingId);
+    const previousValue = previousFinding?.false_positive;
+    const currentVersion = previousFinding?.version || 1;
+
+    setLabelingId(findingId);
+    setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, false_positive: isFalsePositive } : f));
+    if (detailFinding && detailFinding.id === findingId) {
+      setDetailFinding((prev) => prev ? { ...prev, false_positive: isFalsePositive } : null);
+    }
+
+    try {
+      await labelFinding(findingId, isFalsePositive, currentVersion, controller.signal);
+      setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, version: currentVersion + 1 } : f));
+      if (detailFinding && detailFinding.id === findingId) {
+        setDetailFinding((prev) => prev ? { ...prev, version: currentVersion + 1 } : null);
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+
+      console.error("Failed to label finding", err);
+      setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, false_positive: previousValue } : f));
+      if (detailFinding && detailFinding.id === findingId) {
+        setDetailFinding((prev) => prev ? { ...prev, false_positive: previousValue } : null);
+      }
+
+      if (err.message?.includes('409') || err.status === 409) {
+        alert("This finding has been modified by another user. Your changes were not saved.");
+      } else {
+        alert("Failed to update finding label. Please try again.");
+      }
+    } finally {
+      setLabelingId((prev) => prev === findingId ? null : prev);
+    }
+  };
 
   const handleStatusUpdate = async (findingId: string, newStatus: "open" | "accepted" | "ignored") => {
     setIsUpdatingStatus(true);
     try {
       await updateFindingStatus(findingId, newStatus);
-      setFindings((prev) => 
+      setFindings((prev) =>
         prev.map((f) => f.id === findingId ? { ...f, status: newStatus } : f)
       );
       if (detailFinding && detailFinding.id === findingId) {
@@ -240,10 +298,21 @@ export function Findings() {
     }
   };
 
+  const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set());
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+
+  const availableTools = useMemo(() => Array.from(new Set(findings.map(f => f.tool).filter(Boolean))), [findings]);
+  const availableStatuses = ["open", "accepted", "ignored"];
+
   const activeSeverities = useMemo(
     () => new Set(filters.filter((f) => f.active).map((f) => f.id)),
     [filters],
   );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filters, sortBy, selectedStatuses, selectedTools]);
 
   const filteredFindings = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -258,7 +327,13 @@ export function Findings() {
       const matchesSeverity =
         activeSeverities.size === 0 || activeSeverities.has(f.severity);
 
-      return matchesQuery && matchesSeverity;
+      const matchesStatus =
+        selectedStatuses.size === 0 || selectedStatuses.has(f.status);
+
+      const matchesTool =
+        selectedTools.size === 0 || selectedTools.has(f.tool);
+
+      return matchesQuery && matchesSeverity && matchesStatus && matchesTool;
     });
 
     const severityOrder: Record<string, number> = {
@@ -296,7 +371,7 @@ export function Findings() {
     }
 
     return filtered;
-  }, [findings, searchQuery, activeSeverities, sortBy]);
+  }, [findings, searchQuery, activeSeverities, sortBy, selectedStatuses, selectedTools]);
 
   if (isLoadingFindings) {
     return (
@@ -319,7 +394,7 @@ export function Findings() {
             scan.
           </p>
           <div className="mt-4">
-            <Button onClick={() => navigate("/")}>Go to Dashboard</Button>
+            <Button onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>
           </div>
         </div>
       </div>
@@ -335,7 +410,16 @@ export function Findings() {
             {findings.length} vulnerabilities detected in {scan.project_name}
           </p>
         </div>
-        <ExportReportButton scanId={scan.job_id} />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => downloadFindingsAsCsv(filteredFindings, `${scan.project_name}-findings.csv`)}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export CSV
+          </Button>
+          <ExportReportButton scanId={scan.job_id} />
+        </div>
       </div>
 
       <Card className="mb-6">
@@ -377,7 +461,7 @@ export function Findings() {
                   ML Score
                 </button>
               </div>
-              <Button variant="outline">
+              <Button variant="outline" onClick={() => setIsFilterSheetOpen(true)}>
                 <Filter className="h-4 w-4 mr-2" />
                 More Filters
               </Button>
@@ -398,12 +482,24 @@ export function Findings() {
                 {selectedFindings.size !== 1 ? "s" : ""} selected
               </span>
               <div className="flex gap-2">
-                <Link to="/fix">
+                <Link
+                  to="/fix"
+                  state={{
+                    findingIds: [...selectedFindings],
+                  }}
+                >
                   <Button size="sm">Propose Fixes</Button>
                 </Link>
-                <Button variant="outline" size="sm" disabled>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const selected = findings.filter((f) => selectedFindings.has(f.id));
+                    downloadFindingsAsCsv(selected, `${scan.project_name}-selected-findings.csv`);
+                  }}
+                >
                   <Download className="h-4 w-4 mr-2" />
-                  Export
+                  Export CSV
                 </Button>
                 <Button variant="outline" size="sm" disabled>
                   <Plus className="h-4 w-4 mr-2" />
@@ -432,15 +528,16 @@ export function Findings() {
               <TableHead>Title</TableHead>
               <TableHead>File</TableHead>
               <TableHead>Tool</TableHead>
+              <TableHead className="text-center" title="Mark as True Positive or False Positive">Label ⓘ</TableHead>
               <TableHead className="text-right">Confidence</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredFindings.slice(0, 150).map((finding) => (
+            {filteredFindings.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((finding) => (
               <TableRow
                 key={finding.id}
-                className="cursor-pointer hover:bg-muted/50"
+                className={cn("cursor-pointer hover:bg-muted/50", finding.false_positive && "opacity-60 bg-muted/20")}
                 onClick={() => setDetailFinding(finding)}
               >
                 <TableCell onClick={(e) => e.stopPropagation()}>
@@ -458,8 +555,13 @@ export function Findings() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <div className="font-medium max-w-md truncate">
+                  <div className="font-medium max-w-md truncate flex items-center gap-2">
                     {finding.title}
+                    {finding.false_positive && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-500 border border-rose-500/20 shrink-0">
+                        FP
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {finding.category}
@@ -473,6 +575,16 @@ export function Findings() {
                 </TableCell>
                 <TableCell>
                   <ToolBadge tool={finding.tool} />
+                </TableCell>
+                <TableCell className="text-center">
+                  <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <Button variant="ghost" size="icon" disabled={labelingId === finding.id} className={cn("h-7 w-7", finding.false_positive === false && "text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-500")} onClick={(e) => handleLabelFalsePositive(finding.id, false, e)} title="True Positive">
+                      <ThumbsUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="icon" disabled={labelingId === finding.id} className={cn("h-7 w-7", finding.false_positive === true && "text-rose-500 bg-rose-500/10 hover:bg-rose-500/20 hover:text-rose-500")} onClick={(e) => handleLabelFalsePositive(finding.id, true, e)} title="False Positive">
+                      <ThumbsDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </TableCell>
                 <TableCell className="text-right">
                   <span className="text-sm font-medium">
@@ -505,10 +617,10 @@ export function Findings() {
       </Card>
 
       <div className="md:hidden space-y-3">
-        {filteredFindings.slice(0, 150).map((finding) => (
+        {filteredFindings.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((finding) => (
           <Card
             key={finding.id}
-            className="hover:bg-muted/50 transition-colors cursor-pointer"
+            className={cn("hover:bg-muted/50 transition-colors cursor-pointer", finding.false_positive && "opacity-60 bg-muted/20")}
             onClick={() => setDetailFinding(finding)}
           >
             <CardContent className="p-4">
@@ -519,12 +631,17 @@ export function Findings() {
                   onClick={(e) => e.stopPropagation()}
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center flex-wrap gap-2 mb-2">
                     <SeverityChip severity={finding.severity} />
                     {finding.ml_score !== undefined && finding.ml_score !== null && (
                       <MlScorePill score={finding.ml_score} />
                     )}
                     <ToolBadge tool={finding.tool} />
+                    {finding.false_positive && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                        FP
+                      </span>
+                    )}
                   </div>
                   <div className="font-medium mb-1 line-clamp-2">
                     {finding.title}
@@ -534,17 +651,65 @@ export function Findings() {
                   </div>
                 </div>
               </div>
+
+              <div className="flex items-center justify-end mt-3 pt-3 border-t border-border/50">
+                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                  <span className="text-xs text-muted-foreground mr-2" title="Mark as True Positive or False Positive">Accurate? ⓘ</span>
+                  <Button variant="ghost" size="icon" disabled={labelingId === finding.id} aria-label="True Positive" title="True Positive" className={cn("h-7 w-7", finding.false_positive === false && "text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-500")} onClick={(e) => handleLabelFalsePositive(finding.id, false, e)}>
+                    <ThumbsUp className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" disabled={labelingId === finding.id} aria-label="False Positive" title="False Positive" className={cn("h-7 w-7", finding.false_positive === true && "text-rose-500 bg-rose-500/10 hover:bg-rose-500/20 hover:text-rose-500")} onClick={(e) => handleLabelFalsePositive(finding.id, true, e)}>
+                    <ThumbsDown className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         ))}
       </div>
 
-    <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
+      {Math.ceil(filteredFindings.length / itemsPerPage) > 1 && (
+        <Card className="mt-4">
+          <CardContent className="flex items-center justify-between p-4">
+            <span className="text-sm text-muted-foreground">
+              Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredFindings.length)} of {filteredFindings.length} findings
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" /> Prev
+              </Button>
+              <span className="text-sm font-medium px-2">Page {currentPage} of {Math.ceil(filteredFindings.length / itemsPerPage)}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredFindings.length / itemsPerPage), p + 1))}
+                disabled={currentPage === Math.ceil(filteredFindings.length / itemsPerPage)}
+              >
+                Next <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
         <SheetContent className="w-full sm:max-w-2xl overflow-y-auto flex flex-col p-6 sm:p-8">
           {detailFinding && (
             <>
               <SheetHeader className="pb-4 border-b border-border/50">
-                <SheetTitle className="text-xl font-semibold tracking-tight">{detailFinding.title}</SheetTitle>
+                <SheetTitle className="text-xl font-semibold tracking-tight flex items-center flex-wrap gap-3">
+                  {detailFinding.title}
+                  {detailFinding.false_positive && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                      Marked as False Positive
+                    </span>
+                  )}
+                </SheetTitle>
                 <SheetDescription className="text-sm text-muted-foreground mt-1">
                   Finding ID: <span className="font-mono">{detailFinding.id}</span>
                 </SheetDescription>
@@ -659,11 +824,29 @@ export function Findings() {
                 </Tabs>
               </div>
 
-            {/* Status Buttons - Dynamic and clickable */}
-              <div className="flex gap-3 pt-6 mt-6 border-t border-border/50 shrink-0">
+              {/* ML Labeling Section */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-6 mt-6 border-t border-border/50 shrink-0">
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold">Label for ML Training</span>
+                  <span className="text-xs text-muted-foreground">Help improve the false positive classifier.</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={labelingId === detailFinding.id} className={cn(detailFinding.false_positive === false && "border-emerald-500 text-emerald-500 bg-emerald-500/10 hover:bg-emerald-500/20 hover:text-emerald-500")} onClick={() => handleLabelFalsePositive(detailFinding.id, false)}>
+                    <ThumbsUp className="h-4 w-4 mr-2" />
+                    True Positive
+                  </Button>
+                  <Button variant="outline" size="sm" disabled={labelingId === detailFinding.id} className={cn(detailFinding.false_positive === true && "border-rose-500 text-rose-500 bg-rose-500/10 hover:bg-rose-500/20 hover:text-rose-500")} onClick={() => handleLabelFalsePositive(detailFinding.id, true)}>
+                    <ThumbsDown className="h-4 w-4 mr-2" />
+                    False Positive
+                  </Button>
+                </div>
+              </div>
+
+              {/* Status Buttons - Dynamic and clickable */}
+              <div className="flex gap-3 pt-4 shrink-0">
                 {detailFinding.status === 'accepted' ? (
-                   <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 border-status-success text-status-success bg-status-success/10 hover:bg-status-success/20 hover:text-status-success"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'open')}
                     disabled={isUpdatingStatus}
@@ -672,8 +855,8 @@ export function Findings() {
                     Accepted (Click to Re-open)
                   </Button>
                 ) : (
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 hover:bg-status-success/10 hover:text-status-success hover:border-status-success/50 transition-colors"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'accepted')}
                     disabled={isUpdatingStatus}
@@ -684,8 +867,8 @@ export function Findings() {
                 )}
 
                 {detailFinding.status === 'ignored' ? (
-                   <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 border-muted-foreground text-muted-foreground bg-muted hover:bg-muted/80"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'open')}
                     disabled={isUpdatingStatus}
@@ -694,8 +877,8 @@ export function Findings() {
                     Ignored (Click to Re-open)
                   </Button>
                 ) : (
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 hover:bg-muted/50 transition-colors"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'ignored')}
                     disabled={isUpdatingStatus}
@@ -707,6 +890,76 @@ export function Findings() {
               </div>
             </>
           )}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={isFilterSheetOpen} onOpenChange={setIsFilterSheetOpen}>
+        <SheetContent side="right" className="w-full sm:max-w-md p-6">
+          <SheetHeader className="pb-4 border-b border-border/50">
+            <SheetTitle>Advanced Filters</SheetTitle>
+            <SheetDescription>Filter findings by status and tool</SheetDescription>
+          </SheetHeader>
+
+          <div className="py-6 space-y-8">
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold tracking-tight">Status</h3>
+              <div className="space-y-3">
+                {availableStatuses.map(status => (
+                  <div key={status} className="flex items-center space-x-3">
+                    <Checkbox
+                      id={`status-${status}`}
+                      checked={selectedStatuses.has(status)}
+                      onCheckedChange={(checked) => {
+                        const next = new Set(selectedStatuses);
+                        if (checked) next.add(status);
+                        else next.delete(status);
+                        setSelectedStatuses(next);
+                      }}
+                    />
+                    <label htmlFor={`status-${status}`} className="text-sm font-medium leading-none capitalize">
+                      {status}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold tracking-tight">Tool</h3>
+              <div className="space-y-3">
+                {availableTools.map(tool => (
+                  <div key={tool} className="flex items-center space-x-3">
+                    <Checkbox
+                      id={`tool-${tool}`}
+                      checked={selectedTools.has(tool)}
+                      onCheckedChange={(checked) => {
+                        const next = new Set(selectedTools);
+                        if (checked) next.add(tool);
+                        else next.delete(tool);
+                        setSelectedTools(next);
+                      }}
+                    />
+                    <label htmlFor={`tool-${tool}`} className="text-sm font-medium leading-none capitalize">
+                      {tool}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-border/50">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setSelectedStatuses(new Set());
+                  setSelectedTools(new Set());
+                }}
+              >
+                Clear All Advanced Filters
+              </Button>
+            </div>
+          </div>
         </SheetContent>
       </Sheet>
     </div>
