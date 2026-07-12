@@ -44,3 +44,20 @@ def test_upload_aborts_when_stream_exceeds_limit():
 
     assert response.status_code == 413
     assert "Actual file size exceeds" in response.json()["detail"]
+def test_upload_rejects_non_zip_file():
+    """
+    Test that the server immediately rejects uploads whose filename
+    does not end with .zip.
+    """
+    files = {
+        "project": ("test.txt", io.BytesIO(b"hello"), "text/plain")
+    }
+    data = {"project": "test_project"}
+
+    response = client.post("/scan", files=files, data=data)
+
+    assert response.status_code == 415
+    assert (
+        response.json()["detail"]
+        == "Only .zip archives are accepted. Please compress your project and try again."
+    )
