@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from app.policy.parser import parse_policy
+from app.policy.evaluator import evaluate_policy
 
 import aiosqlite
 import httpx
@@ -373,7 +375,7 @@ def _maybe_use_single_top_folder(repo_dir: Path) -> Path:
 
 
 async def _run_single_scan_task(
-    job_id: str, project_name: str, scan_method: str, scan_root: Path
+    job_id: str, project_name: str, scan_method: str, scan_root: Path,  policy_path: Path | None = None,
 ):
     def update_progress(phase, status):
         if job_id in ACTIVE_SCANS:
@@ -402,6 +404,18 @@ async def _run_single_scan_task(
         )
 
         raw_finding_count = len(findings)
+        policy_result = None
+
+        if policy_path is not None:
+            try:
+               policy = parse_policy(policy_path)
+               policy_result = evaluate_policy(findings, policy)
+            except Exception as e:
+               policy_result = {
+                    "policy_status": "ERROR",
+                    "reason": str(e),
+                    "violations": [],
+               }
 
         disable_dedup = os.environ.get("DISABLE_DEDUP", "").lower() == "true"
         try:
@@ -465,6 +479,7 @@ async def _run_single_scan_task(
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "completed"
             ACTIVE_SCANS[job_id]["findings_count"] = finding_count
+            ACTIVE_SCANS[job_id]["policy"] = policy_result
     except Exception:
         logger.exception("Failed scan task for %s", job_id)
         if job_id in ACTIVE_SCANS:
@@ -487,6 +502,7 @@ async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
     project: UploadFile = File(...),
+    policy: UploadFile | None = File(None),
     project_name: str = Form("project"),
 ):
     content_length = request.headers.get("content-length")
@@ -526,6 +542,13 @@ async def scan(
         raise HTTPException(status_code=400, detail=f"Error saving upload: {e}")
 
     repo_dir = job_dir / "repo"
+    policy_path = None
+
+    if policy is not None:
+        policy_path = job_dir / policy.filename
+        with open(policy_path, "wb") as f:
+           while chunk := await policy.read(1024 * 1024):
+             f.write(chunk)
     ensure_dir(repo_dir)
 
     try:
@@ -536,7 +559,7 @@ async def scan(
 
     scan_root = _maybe_use_single_top_folder(repo_dir)
     background_tasks.add_task(
-        _run_single_scan_task, job_id, project_name, "zip", scan_root
+        _run_single_scan_task, job_id, project_name, "zip", scan_root, policy_path,
     )
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
