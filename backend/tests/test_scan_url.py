@@ -37,6 +37,9 @@ class MockStreamResponse:
 
 
 def test_scan_url_invalid_format():
+    # No need to mock validate_git_ref here: repo_url format is
+    # validated before the ref is ever checked against the remote, so
+    # this never reaches validate_git_ref / the network.
     res = client.post(
         "/scan-url", data={"repo_url": "not-a-url", "project_name": "test_project"}
     )
@@ -44,8 +47,43 @@ def test_scan_url_invalid_format():
     assert "Only GitHub repo URLs are supported right now." in res.json()["detail"]
 
 
+def test_scan_url_invalid_ref_characters():
+    res = client.post(
+        "/scan-url",
+        data={
+            "repo_url": "https://github.com/owner/repo",
+            "ref": "main; rm -rf /",
+            "project_name": "test_project",
+        },
+    )
+    assert res.status_code == 400
+    assert "invalid characters" in res.json()["detail"].lower()
+
+
+@patch("app.main.validate_git_ref")
+def test_scan_url_ref_not_found(mock_validate_git_ref):
+    mock_validate_git_ref.return_value = False
+
+    res = client.post(
+        "/scan-url",
+        data={
+            "repo_url": "https://github.com/owner/repo",
+            "ref": "does-not-exist",
+            "project_name": "test_project",
+        },
+    )
+    assert res.status_code == 404
+    assert "not found" in res.json()["detail"].lower()
+    mock_validate_git_ref.assert_called_once_with(
+        "https://github.com/owner/repo", "does-not-exist"
+    )
+
+
+@patch("app.main.validate_git_ref")
 @patch("app.main.httpx.AsyncClient")
-def test_scan_url_not_found(mock_async_client):
+def test_scan_url_not_found(mock_async_client, mock_validate_git_ref):
+    mock_validate_git_ref.return_value = True
+
     mock_client = MagicMock()
     mock_async_client.return_value.__aenter__ = AsyncMock(return_value=mock_client)
     mock_async_client.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -64,8 +102,11 @@ def test_scan_url_not_found(mock_async_client):
     assert "Failed to download repo ZIP" in res.json()["detail"]
 
 
+@patch("app.main.validate_git_ref")
 @patch("app.main.httpx.AsyncClient")
-def test_scan_url_timeout(mock_async_client):
+def test_scan_url_timeout(mock_async_client, mock_validate_git_ref):
+    mock_validate_git_ref.return_value = True
+
     mock_client = MagicMock()
     mock_async_client.return_value.__aenter__ = AsyncMock(return_value=mock_client)
     mock_async_client.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -83,14 +124,22 @@ def test_scan_url_timeout(mock_async_client):
     assert "Network error downloading repo" in res.json()["detail"]
 
 
+@patch("app.main.validate_git_ref")
 @patch("app.main.httpx.AsyncClient")
 @patch("app.main.download_to_path", new_callable=AsyncMock)
 @patch("app.main.unzip_to_dir")
 @patch("app.main._scan_repo_dir")
 @patch("app.main.get_db")
 def test_scan_url_success(
-    mock_get_db, mock_scan, mock_unzip, mock_download, mock_async_client
+    mock_get_db,
+    mock_scan,
+    mock_unzip,
+    mock_download,
+    mock_async_client,
+    mock_validate_git_ref,
 ):
+    mock_validate_git_ref.return_value = True
+
     mock_client = MagicMock()
     mock_async_client.return_value.__aenter__ = AsyncMock(return_value=mock_client)
     mock_async_client.return_value.__aexit__ = AsyncMock(return_value=None)
@@ -119,3 +168,16 @@ def test_scan_url_success(
     assert data["project_name"] == "test_project"
     assert data["status"] == "running"
     assert "job_id" in data
+
+
+def test_github_zip_url_supports_tags_and_shas():
+    from app.main import github_zip_url
+
+    assert (
+        github_zip_url("https://github.com/owner/repo", ref="v1.0.0")
+        == "https://github.com/owner/repo/archive/v1.0.0.zip"
+    )
+    assert (
+        github_zip_url("https://github.com/owner/repo", ref="a1b2c3d4")
+        == "https://github.com/owner/repo/archive/a1b2c3d4.zip"
+    )

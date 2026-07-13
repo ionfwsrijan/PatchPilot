@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -77,6 +78,24 @@ from .scanners.semgrep import run_semgrep
 from .security import verify_api_key
 from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
+
+REF_PATTERN = re.compile(r"^[a-zA-Z0-9_.\-/]+$")
+
+
+def validate_git_ref(repo_url: str, ref: str) -> bool:
+    try:
+        # Use ls-remote to check if ref exists in the remote repo.
+        # git ls-remote exits 0 with empty stdout when the ref doesn't
+        # exist, so we must check the output itself, not just the
+        # return code (which only signals errors like an unreachable
+        # or non-existent repo).
+        output = subprocess.check_output(
+            ["git", "ls-remote", "--", repo_url, ref]
+        )
+        return bool(output.strip())
+    except subprocess.CalledProcessError:
+        return False
+
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
 
@@ -145,7 +164,6 @@ def health():
         "status": "healthy" if healthy else "degraded",
         "scanners": scanners,
     }
-
 
 @app.get("/api/health/ollama", tags=["Health"])
 async def ollama_health():
@@ -374,17 +392,27 @@ def finding_key(f: Finding):
     )
 
 
-def github_zip_url(repo_url: str, ref: str = "main") -> str:
-    repo_url = repo_url.strip()
-    m = re.match(
-        r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url, re.IGNORECASE
-    )
+GITHUB_REPO_URL_RE = re.compile(
+    r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", re.IGNORECASE
+)
+
+
+def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
+    m = GITHUB_REPO_URL_RE.match(repo_url.strip())
     if not m:
         raise HTTPException(
             status_code=400, detail="Only GitHub repo URLs are supported right now."
         )
-    owner, repo = m.group(1), m.group(2)
-    return f"https://github.com/{owner}/{repo}/archive/refs/heads/{ref}.zip"
+    return m.group(1), m.group(2)
+
+
+def github_zip_url(repo_url: str, ref: str = "main") -> str:
+    owner, repo = parse_github_repo_url(repo_url)
+    # GitHub's generic archive endpoint resolves branches, tags, and
+    # commit SHAs alike, so we don't need to know the ref type up
+    # front (and don't have to guess wrong for tags/SHAs by assuming
+    # refs/heads/).
+    return f"https://github.com/{owner}/{repo}/archive/{ref}.zip"
 
 
 ALLOWED_REDIRECT_HOSTS = {
@@ -771,6 +799,21 @@ async def scan_url(
     is returned immediately for tracking scan progress and retrieving
     results.
     """
+    
+    parse_github_repo_url(repo_url)  # raises 400 early on a non-GitHub URL
+
+    if not REF_PATTERN.match(ref):
+        raise HTTPException(
+            status_code=400, detail="Ref contains invalid characters."
+        )
+
+    is_valid_ref = await run_in_threadpool(validate_git_ref, repo_url, ref)
+    if not is_valid_ref:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Ref '{ref}' not found in repository.",
+        )
+
     job_id = next(tempfile._get_candidate_names())
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
@@ -1451,6 +1494,13 @@ async def _run_repo_scan_task(
             archive_path = job_dir / "repo.zip"
             repo_dir = job_dir / "repo"
             ensure_dir(repo_dir)
+
+            if not REF_PATTERN.match(ref):
+                raise ValueError(f"Ref '{ref}' contains invalid characters.")
+
+            is_valid_ref = await run_in_threadpool(validate_git_ref, repo_url, ref)
+            if not is_valid_ref:
+                raise ValueError(f"Ref '{ref}' not found in repository '{repo_url}'.")
 
             zip_url = github_zip_url(repo_url, ref=ref)
             await download_to_path(zip_url, archive_path, cancel_event=cancel_event)
