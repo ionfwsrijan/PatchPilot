@@ -30,3 +30,26 @@ SQLite database (`patchpilot.db`) is auto-created in `backend/` on first server 
 | `scanner`     | TEXT    | `semgrep`, `osv`, or `gitleaks`                           |
 | `message`     | TEXT    | Description of the finding                                |
 | `created_at`  | TEXT    | Timestamp of finding creation                             |
+
+## Authentication
+
+Several endpoints (including `/leaderboard/update` and `/leaderboard`) are protected by API key authentication.
+
+Set the `PATCHPILOT_API_KEY` environment variable before starting the server:
+
+```bash
+export PATCHPILOT_API_KEY="your-secret-key"
+```
+
+When set, protected endpoints require an `Authorization: Bearer` header:
+
+```bash
+curl -X POST http://localhost:8000/leaderboard/update \
+  -H "Authorization: Bearer \$PATCHPILOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"github_username": "user", "pr_description": "Fixes #1", "fixes_passed": 1, "is_pr_merged": true}'
+```
+
+Requests without a valid key receive `401 Unauthorized`.
+
+> **Note:** If `PATCHPILOT_API_KEY` is not set, authentication is disabled. This is intended for local development only — always set the env var in production.
