@@ -1,12 +1,14 @@
-import { ArrowRight, FileSearch, ShieldCheck, Wrench } from "lucide-react";
+import { FileSearch, ShieldCheck, Wrench } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { SplitText } from "../components/split-text";
+import { Navbar } from "../components/navbar";
 
 export function Landing() {
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col items-center justify-center px-4 py-16 text-center sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-background text-foreground">
+      <Navbar />
+      <section className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-6xl flex-col items-center justify-center px-4 py-16 text-center sm:px-6 lg:px-8">
         <div className="mb-8 inline-flex items-center rounded-full border border-border bg-muted px-4 py-2 text-sm font-medium text-muted-foreground">
           Security scans, fixes, and evidence in one focused workspace
         </div>
@@ -56,6 +58,6 @@ export function Landing() {
           </div>
         </div>
       </section>
-    </main>
+    </div>
   );
 }
