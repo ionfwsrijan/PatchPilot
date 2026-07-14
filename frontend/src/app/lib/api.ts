@@ -372,3 +372,33 @@ export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
   }
   return res.json();
 }
+export type SecurityRegressionResponse = {
+  baseline_scan: string;
+  current_scan: string;
+  introduced: any[];
+  resolved: any[];
+  persistent: any[];
+  regressions: Record<string, number>;
+  improvements: Record<string, number>;
+  overall_trend: string;
+};
+
+export async function compareSecurityRegression(
+  baselineJobId: string,
+  currentJobId: string,
+) {
+  const params = new URLSearchParams({
+    baseline_job_id: baselineJobId,
+    current_job_id: currentJobId,
+  });
+
+  const res = await fetch(
+    `${API_BASE}/api/security/regression?${params.toString()}`
+  );
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return (await res.json()) as SecurityRegressionResponse;
+}

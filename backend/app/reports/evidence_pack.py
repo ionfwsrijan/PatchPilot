@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import zipfile
 from datetime import datetime, timezone
@@ -9,7 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_evidence_pack(
-    repo_dir: Path, out_dir: Path, project_name: str, job_id: str, job_dir: Path = None
+    repo_dir: Path,
+    out_dir: Path,
+    project_name: str,
+    job_id: str,
+    job_dir: Path = None,
+    regression_data: dict | None = None,
 ) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     pack_root = out_dir / f"patchpilot_evidence_{project_name}_{job_id}_{ts}"
@@ -69,6 +75,7 @@ def build_evidence_pack(
         project_name=project_name, job_id=job_id, has_verify=has_verify
     )
     (pack_root / "REPORT.md").write_text(report_md, encoding="utf-8")
+    write_security_regression_report(pack_root, regression_data)
 
     zip_path = out_dir / f"{pack_root.name}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -78,7 +85,55 @@ def build_evidence_pack(
 
     return zip_path
 
+def write_security_regression_report(
+    pack_root: Path,
+    regression_data: dict | None = None,
+):
+    """
+    Writes security regression artifacts into the evidence pack.
+    """
 
+    if regression_data is None:
+        regression_data = {
+            "baseline_scan": None,
+            "current_scan": None,
+            "introduced": [],
+            "resolved": [],
+            "persistent": [],
+            "regressions": {},
+            "improvements": {},
+            "overall_trend": "Unknown",
+        }
+
+    report_path = pack_root / "security-regression-report.json"
+
+    report_path.write_text(
+        json.dumps(regression_data, indent=2),
+        encoding="utf-8",
+    )
+
+    summary_path = pack_root / "security-trend-summary.txt"
+
+    summary = f"""Security Regression Summary
+
+Overall Trend:
+{regression_data.get("overall_trend")}
+
+Introduced Findings:
+{len(regression_data.get("introduced", []))}
+
+Resolved Findings:
+{len(regression_data.get("resolved", []))}
+
+Persistent Findings:
+{len(regression_data.get("persistent", []))}
+"""
+
+    summary_path.write_text(
+        summary,
+        encoding="utf-8",
+    )
+    
 def _render_report(project_name: str, job_id: str, has_verify: bool = False) -> str:
     verify_section = ""
     if has_verify:
@@ -100,7 +155,10 @@ This evidence pack contains artifacts from a verification re-scan:
 - `raw/semgrep.json` — Baseline SAST scan results (Semgrep)
 - `raw/osv.json` — Baseline Dependency vulnerability results (OSV-Scanner)
 - `raw/gitleaks.json` — Baseline Secret detection results (Gitleaks)
+
 - This `REPORT.md` summary
+- `security-regression-report.json` — Security regression comparison report
+- `security-trend-summary.txt` — Human-readable regression summary
 {verify_section}
 ## Methodology (high-level)
 1. Scan codebase for vulnerabilities (SAST, dependency CVEs, secrets).

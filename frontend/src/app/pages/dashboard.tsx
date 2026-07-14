@@ -1,7 +1,16 @@
 import { useRef, useState, useEffect } from "react";
 import { Upload, Link as LinkIcon, Clock, Trash2, Download, Loader2, CheckCircle, AlertTriangle, Building2, Layers } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { scanRepoUrl, scanZip, downloadAuditReport, scanOrganization, getOrgJobStatus, abortOrganizationScan, API_BASE } from "../lib/api";
+import {
+  scanRepoUrl,
+  scanZip,
+  downloadAuditReport,
+  scanOrganization,
+  getOrgJobStatus,
+  abortOrganizationScan,
+  API_BASE,
+  compareSecurityRegression,
+} from "../lib/api";
 import { saveLastScan } from "../lib/scan-store";
 import { Button } from "../components/ui/button";
 import { TrendChart } from "../components/trend-chart";
@@ -25,7 +34,6 @@ import {
 import { StatusPill } from "../components/status-pill";
 import { Input } from "../components/ui/input";
 import { cn } from "../components/ui/utils";
-import { ProgressStepper } from "../components/progress-stepper";
 
 type UiJobStatus = "completed" | "running" | "failed" | "pending";
 
@@ -143,7 +151,8 @@ export function Dashboard() {
   const [recentJobs, setRecentJobs] = useState<UiJob[]>(() =>
     getLocalRecentJobs(),
   );
-
+  const [regressionData, setRegressionData] = useState<any>(null);
+  const [regressionError, setRegressionError] = useState("");
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState("");
   const [repoRef, setRepoRef] = useState("main");
@@ -174,7 +183,7 @@ export function Dashboard() {
     }).format(date);
   };
 
-  const handleScanSuccess = (scan: {
+  const handleScanSuccess = async (scan: {
     job_id: string;
     project_name: string;
     findings?: any[];
@@ -191,11 +200,25 @@ export function Dashboard() {
     };
 
     saveLocalRecentJob(job);
-    setRecentJobs(getLocalRecentJobs());
 
-    navigate("/findings");
+  const updatedJobs = getLocalRecentJobs();
+  setRecentJobs(updatedJobs);
+
+  if (updatedJobs.length > 1) {
+   try {
+    const result = await compareSecurityRegression(
+      updatedJobs[1].id,   // previous scan
+      updatedJobs[0].id,   // current scan
+    );
+
+    setRegressionData(result);
+    setRegressionError("");
+   } catch {
+     setRegressionError("Unable to compare security regression.");
+   }
+  }
+  navigate("/findings");
   };
-
   const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);
   const [singleScanState, setSingleScanState] = useState<any>(null);
 
@@ -807,6 +830,84 @@ const handleAbortScan = async (mode: "pending" | "force") => {
             <DependencyDiff />
           </CardContent>
         </Card>
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle>Security Regression</CardTitle>
+            <CardDescription>
+              Comparison between the latest scan and the previous scan.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent>
+          {regressionError ? (
+            <p className="text-sm text-destructive">{regressionError}</p>
+          ) : !regressionData ? (
+            <p className="text-sm text-muted-foreground">
+              Run at least two scans to view security regression.
+            </p>
+          ) : (
+            <div className="space-y-4">
+
+              <div>
+                <strong>Overall Trend:</strong>{" "}
+                {regressionData.overall_trend}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+
+                <div className="rounded border p-4">
+                  <h4 className="font-semibold mb-2">Regressions</h4>
+
+                  {Object.keys(regressionData.regressions).length === 0 ? (
+                    <p>No regressions</p>
+                  ) : (
+                    Object.entries(regressionData.regressions).map(([k, v]) => (
+                      <div key={k}>
+                       {k}: {String(v)}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="rounded border p-4">
+                <h4 className="font-semibold mb-2">Improvements</h4>
+
+                {Object.keys(regressionData.improvements).length === 0 ? (
+                  <p>No improvements</p>
+                ) : (
+                  Object.entries(regressionData.improvements).map(([k, v]) => (
+                    <div key={k}>
+                     {k}: {String(v)}
+                    </div>
+                  ))
+                )}
+              </div>
+
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+
+              <div className="rounded border p-4">
+                <strong>Introduced</strong>
+                <div>{regressionData.introduced.length}</div>
+              </div>
+
+              <div className="rounded border p-4">
+                <strong>Resolved</strong>
+                <div>{regressionData.resolved.length}</div>
+              </div>
+
+              <div className="rounded border p-4">
+                <strong>Persistent</strong>
+                <div>{regressionData.persistent.length}</div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+      </CardContent>
+      </Card>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -934,4 +1035,4 @@ const handleAbortScan = async (mode: "pending" | "force") => {
       </Card>
     </div>
   );
-}
+  }
