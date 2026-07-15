@@ -228,23 +228,23 @@ class TestDeleteJob:
         mock_job_dir = AsyncMock()
         mock_job_dir.exists.return_value = True
         mock_safe_job_dir.return_value = mock_job_dir
-        
+
         db = db_mock(True)
         # Mock successful execution
         db.execute = AsyncMock()
         db.commit = AsyncMock()
-        
+
         with patch("app.main.get_db", AsyncMock(return_value=db)):
             res = client.delete(f"/jobs/{JOB_ID}")
-            
+
         assert res.status_code == 200
         assert res.json() == {"deleted": True}
-        
+
         # Verify db logic called
-        assert db.execute.call_count == 4 # BEGIN, DELETE x3
+        assert db.execute.call_count == 4  # BEGIN, DELETE x3
         assert db.commit.called
         assert not db.rollback.called
-        
+
         # Verify rmtree called because job_dir exists and db commit didn't fail
         mock_rmtree.assert_called_once_with(mock_job_dir)
 
@@ -254,20 +254,20 @@ class TestDeleteJob:
         mock_job_dir = AsyncMock()
         mock_job_dir.exists.return_value = False
         mock_safe_job_dir.return_value = mock_job_dir
-        
+
         db = db_mock(True)
         db.execute = AsyncMock()
         db.commit = AsyncMock()
-        
+
         with patch("app.main.get_db", AsyncMock(return_value=db)):
             res = client.delete(f"/jobs/{JOB_ID}")
-            
+
         assert res.status_code == 200
         assert res.json() == {"deleted": True}
-        
+
         # Verify db was cleaned
         assert db.commit.called
-        
+
         # Verify rmtree NOT called
         mock_rmtree.assert_not_called()
 
@@ -277,19 +277,19 @@ class TestDeleteJob:
         mock_job_dir = AsyncMock()
         mock_job_dir.exists.return_value = True
         mock_safe_job_dir.return_value = mock_job_dir
-        
+
         db = db_mock(True)
         db.execute = AsyncMock(side_effect=Exception("DB Error"))
         db.rollback = AsyncMock()
-        
+
         with patch("app.main.get_db", AsyncMock(return_value=db)):
             res = client.delete(f"/jobs/{JOB_ID}")
-            
+
         assert res.status_code == 500
         assert "Database error" in res.json()["detail"]
-        
+
         # Verify rollback called
         assert db.rollback.called
-        
+
         # Verify rmtree NOT called since db failed
         mock_rmtree.assert_not_called()
