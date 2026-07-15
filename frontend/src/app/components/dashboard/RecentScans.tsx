@@ -1,11 +1,12 @@
 import { Trash2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { StatusPill } from "../status-pill";
 import { ExportReportButton } from "./ExportReportButton";
 import type { UiJob } from "../../hooks/useRecentJobs";
+import { cn } from "../ui/utils";
 
 interface RecentScansProps {
   recentJobs: UiJob[];
@@ -13,6 +14,8 @@ interface RecentScansProps {
 }
 
 export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
+  const navigate = useNavigate();
+
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
     return new Intl.DateTimeFormat("en-US", {
@@ -60,7 +63,17 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
                 </TableHeader>
                 <TableBody>
                   {recentJobs.map((job) => (
-                    <TableRow key={job.id} className="cursor-pointer hover:bg-muted/50">
+                    <TableRow 
+                      key={job.id} 
+                      className={cn(
+                        job.status === "completed" ? "cursor-pointer hover:bg-muted/50" : "opacity-65 cursor-not-allowed"
+                      )}
+                      onClick={() => {
+                        if (job.status === "completed") {
+                          navigate(`/findings?job_id=${job.id}`);
+                        }
+                      }}
+                    >
                       <TableCell className="font-mono text-xs">{job.id}</TableCell>
                       <TableCell className="font-medium">{job.repoName}</TableCell>
                       <TableCell><StatusPill status={job.status} /></TableCell>
@@ -69,11 +82,15 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
                       <TableCell className="text-right">
                         {job.status === "completed" && <span className="font-medium">{job.findingsCount}</span>}
                       </TableCell>
-                      <TableCell className="text-right flex justify-end gap-2">
+                      <TableCell className="text-right flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
                         {job.status === "completed" && <ExportReportButton scanId={job.id} />}
-                        <Link to={job.status === "completed" ? "/findings" : "/dashboard"}>
-                          <Button variant="ghost" size="sm">View</Button>
-                        </Link>
+                        {job.status === "completed" ? (
+                          <Link to={`/findings?job_id=${job.id}`}>
+                            <Button variant="ghost" size="sm">View</Button>
+                          </Link>
+                        ) : (
+                          <Button variant="ghost" size="sm" disabled>View</Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -82,9 +99,12 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
             </div>
 
             <div className="md:hidden space-y-3">
-              {recentJobs.map((job) => (
-                <Link key={job.id} to={job.status === "completed" ? "/findings" : "/dashboard"} className="block">
-                  <Card className="hover:bg-muted/50 transition-colors">
+              {recentJobs.map((job) => {
+                const cardContent = (
+                  <Card className={cn(
+                    "transition-colors",
+                    job.status === "completed" ? "hover:bg-muted/50 cursor-pointer" : "opacity-65 cursor-not-allowed"
+                  )}>
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1 min-w-0">
@@ -95,15 +115,25 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
                       </div>
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span>{formatTimestamp(job.timestamp)}</span>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
                           {job.status === "completed" && <ExportReportButton scanId={job.id} />}
                           {job.status === "completed" && <span className="font-medium text-foreground">{job.findingsCount} findings</span>}
                         </div>
                       </div>
                     </CardContent>
                   </Card>
-                </Link>
-              ))}
+                );
+
+                return job.status === "completed" ? (
+                  <Link key={job.id} to={`/findings?job_id=${job.id}`} className="block">
+                    {cardContent}
+                  </Link>
+                ) : (
+                  <div key={job.id} className="block">
+                    {cardContent}
+                  </div>
+                );
+              })}
             </div>
           </>
         )}

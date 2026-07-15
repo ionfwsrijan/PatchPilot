@@ -372,3 +372,24 @@ export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
   }
   return res.json();
 }
+
+export type Job = {
+  job_id: string;
+  project_name: string;
+  scan_method: string;
+  status: string;
+  finding_count: number | null;
+  raw_finding_count: number | null;
+  created_at: string;
+};
+
+export type ListJobsResponse = {
+  total: number;
+  jobs: Job[];
+};
+
+export async function listJobs(limit = 20, offset = 0): Promise<ListJobsResponse> {
+  const res = await fetch(`${API_BASE}/jobs?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ListJobsResponse;
+}

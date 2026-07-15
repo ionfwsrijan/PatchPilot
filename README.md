@@ -87,6 +87,7 @@ Open `http://localhost:5173` in your browser.
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
+| `GET` | `/jobs` | List scan jobs (paginated) |
 | `POST` | `/scan` | Upload ZIP and scan |
 | `POST` | `/scan-url` | Import GitHub repo URL and scan |
 | `POST` | `/fix` | Generate proposed fixes |

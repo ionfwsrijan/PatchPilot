@@ -45,7 +45,7 @@ import { ToolBadge } from "../components/tool-badge";
 import { CodeBlock } from "../components/code-block";
 import { FilterChips } from "../components/filter-chips";
 import type { Finding } from "../data/sample-data";
-import { loadLastScan } from "../lib/scan-store";
+import { loadLastScan, saveLastScan } from "../lib/scan-store";
 import { getJobFindings, updateFindingStatus, labelFinding } from "../lib/api";
 import { downloadFindingsAsCsv } from "../lib/csv-export";
 type UiFinding = Finding & { false_positive?: boolean | null, version?: number };
@@ -145,32 +145,64 @@ export function MlScorePill({ score }: { score: number }) {
 
 export function Findings() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryJobId = searchParams.get("job_id");
 
   const [scan, setScan] = useState<any>(null);
   const [findings, setFindings] = useState<UiFinding[]>([]);
   const [isLoadingFindings, setIsLoadingFindings] = useState(true);
 
   useEffect(() => {
-    const storedScan = loadLastScan();
-    if (!storedScan?.job_id) {
-      setIsLoadingFindings(false);
-      return;
-    }
-    setScan(storedScan);
-    getJobFindings(storedScan.job_id)
-      .then((response: any) => {
+    const fetchFindings = async () => {
+      setIsLoadingFindings(true);
+      try {
+        let jobId = queryJobId;
+        const storedScan = loadLastScan();
+
+        if (!jobId) {
+          jobId = storedScan?.job_id;
+          if (jobId) {
+            const nextParams = new URLSearchParams(window.location.search);
+            nextParams.set("job_id", jobId);
+            setSearchParams(nextParams, { replace: true });
+            return;
+          }
+        }
+
+        if (!jobId) {
+          setIsLoadingFindings(false);
+          return;
+        }
+
+        const response: any = await getJobFindings(jobId);
         const actualFindings = Array.isArray(response)
           ? response
           : (response.findings || response.data || []);
+
+        const projectName = response.project_name || (storedScan?.job_id === jobId ? storedScan.project_name : "Unknown Project");
+
+        const updatedScan = {
+          job_id: jobId,
+          project_name: projectName,
+          findings: []
+        };
+
+        setScan(updatedScan);
+        saveLastScan(updatedScan);
 
         setFindings(actualFindings.map((bf: any) => ({
           ...mapBackendFindingToUi(bf),
           false_positive: bf.false_positive === 1 || bf.false_positive === true ? true : (bf.false_positive === 0 || bf.false_positive === false ? false : null)
         })));
-      })
-      .catch((err) => console.error("Failed to fetch findings", err))
-      .finally(() => setIsLoadingFindings(false));
-  }, []);
+      } catch (err) {
+        console.error("Failed to fetch findings", err);
+      } finally {
+        setIsLoadingFindings(false);
+      }
+    };
+
+    fetchFindings();
+  }, [queryJobId, setSearchParams]);
 
   const [selectedFindings, setSelectedFindings] = useState<Set<string>>(new Set());
   const [detailFinding, setDetailFinding] = useState<UiFinding | null>(null);
@@ -243,7 +275,6 @@ export function Findings() {
     }
   };
 
-  const [searchParams, setSearchParams] = useSearchParams();
 
   const [searchQuery, setSearchQuery] = useState(() =>
     (searchParams.get("q") ?? "").toString(),

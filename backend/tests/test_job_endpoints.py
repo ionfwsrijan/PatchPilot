@@ -219,3 +219,61 @@ class TestStreamSingleScan:
 
         if JOB_ID in ACTIVE_SCANS:
             del ACTIVE_SCANS[JOB_ID]
+
+
+class TestListJobs:
+    def test_list_jobs_happy_path(self):
+        mock_jobs = [
+            {
+                "job_id": "job1",
+                "project_name": "repo1",
+                "scan_method": "zip",
+                "status": "completed",
+                "finding_count": 5,
+                "raw_finding_count": 10,
+                "created_at": "2026-07-15 20:00:00",
+            },
+            {
+                "job_id": "job2",
+                "project_name": "repo2",
+                "scan_method": "url",
+                "status": "scanning",
+                "finding_count": None,
+                "raw_finding_count": None,
+                "created_at": "2026-07-15 19:00:00",
+            },
+        ]
+
+        count_cur = AsyncMock()
+        count_cur.fetchone = AsyncMock(return_value={"total": 2})
+
+        jobs_cur = AsyncMock()
+        jobs_cur.fetchall = AsyncMock(return_value=mock_jobs)
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[count_cur, jobs_cur])
+        db.__aenter__ = AsyncMock(return_value=db)
+        db.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.main.get_db", AsyncMock(return_value=db)):
+            res = client.get("/jobs?limit=20&offset=0")
+
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total"] == 2
+        assert len(data["jobs"]) == 2
+        assert data["jobs"][0]["job_id"] == "job1"
+        assert data["jobs"][1]["job_id"] == "job2"
+
+    def test_list_jobs_invalid_limit_too_low(self):
+        res = client.get("/jobs?limit=0")
+        assert res.status_code == 422
+
+    def test_list_jobs_invalid_limit_too_high(self):
+        res = client.get("/jobs?limit=101")
+        assert res.status_code == 422
+
+    def test_list_jobs_invalid_offset(self):
+        res = client.get("/jobs?offset=-1")
+        assert res.status_code == 422
+

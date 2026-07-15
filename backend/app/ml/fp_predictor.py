@@ -2,8 +2,16 @@ import logging
 import os
 
 import joblib
-import torch
-from transformers import AutoModel, AutoTokenizer
+
+try:
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    TORCH_AND_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    torch = None
+    AutoModel = None
+    AutoTokenizer = None
+    TORCH_AND_TRANSFORMERS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +31,13 @@ class FalsePositivePredictor:
 
     def _load_models(self):
         if self._models_loaded:
+            return
+
+        if not TORCH_AND_TRANSFORMERS_AVAILABLE:
+            logger.warning(
+                "torch or transformers is not installed. ML inference will be skipped."
+            )
+            self._models_loaded = True
             return
 
         if not os.path.exists(CLASSIFIER_PATH):
@@ -66,7 +81,7 @@ class FalsePositivePredictor:
             for f in findings
         ]
 
-        if not self.is_ready or not findings:
+        if not TORCH_AND_TRANSFORMERS_AVAILABLE or not self.is_ready or not findings:
             return scores
 
         try:

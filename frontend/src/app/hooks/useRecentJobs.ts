@@ -1,6 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { saveLastScan } from "../lib/scan-store";
+import { listJobs } from "../lib/api";
 
 export type UiJobStatus = "completed" | "running" | "failed" | "pending";
 
@@ -13,13 +14,13 @@ export type UiJob = {
   findingsCount: number;
 };
 
-const RECENTS_KEY = "patchpilot:recentJobs";
+const CLEARED_KEY = "patchpilot:clearedJobs";
 
-function getLocalRecentJobs(): UiJob[] {
-  const raw = localStorage.getItem(RECENTS_KEY);
+function getClearedJobIds(): string[] {
+  const raw = localStorage.getItem(CLEARED_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as UiJob[];
+    const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -28,7 +29,31 @@ function getLocalRecentJobs(): UiJob[] {
 
 export function useRecentJobs() {
   const navigate = useNavigate();
-  const [recentJobs, setRecentJobs] = useState<UiJob[]>(getLocalRecentJobs);
+  const [recentJobs, setRecentJobs] = useState<UiJob[]>([]);
+
+  const fetchJobs = useCallback(async () => {
+    try {
+      const res = await listJobs(10, 0);
+      const clearedIds = getClearedJobIds();
+      const filtered = res.jobs
+        .filter((j) => !clearedIds.includes(j.job_id))
+        .map((j) => ({
+          id: j.job_id,
+          repoName: j.project_name,
+          status: j.status as UiJobStatus,
+          timestamp: j.created_at,
+          duration: "-",
+          findingsCount: j.finding_count ?? 0,
+        }));
+      setRecentJobs(filtered);
+    } catch (err) {
+      console.error("Failed to fetch recent jobs:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
 
   const handleScanSuccess = useCallback((scan: { job_id: string; project_name: string; findings?: any[] }) => {
     saveLastScan(scan as any);
@@ -42,22 +67,21 @@ export function useRecentJobs() {
       findingsCount: scan.findings?.length ?? 0,
     };
 
-    const currentJobs = getLocalRecentJobs();
-    const next = [job, ...currentJobs.filter((j) => j.id !== job.id)].slice(0, 10);
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
-    
-    setRecentJobs(next);
-    navigate("/findings");
+    setRecentJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)].slice(0, 10));
+    navigate(`/findings?job_id=${scan.job_id}`);
   }, [navigate]);
 
   const onClearRecents = useCallback(() => {
-    localStorage.removeItem(RECENTS_KEY);
+    const jobIds = recentJobs.map((j) => j.id);
+    const clearedIds = getClearedJobIds();
+    const next = Array.from(new Set([...clearedIds, ...jobIds]));
+    localStorage.setItem(CLEARED_KEY, JSON.stringify(next));
     setRecentJobs([]);
-  }, []);
+  }, [recentJobs]);
 
   return {
     recentJobs,
     handleScanSuccess,
     onClearRecents
   };
-}
+}
