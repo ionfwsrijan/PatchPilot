@@ -1,5 +1,8 @@
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -134,6 +137,51 @@ def test_stream_org_status(mock_get_db, client):
     assert "data:" in response.text
     assert "completed" in response.text
     assert "r1" in response.text
+
+
+@pytest.mark.anyio
+async def test_org_repo_scan_keeps_api_responsive_during_blocking_scan(tmp_path):
+    from app import main
+
+    def blocking_scan(*args, **kwargs):
+        time.sleep(0.3)
+        return [], [], [], [], []
+
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchone.return_value = {"status": "scanning"}
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = mock_cursor
+
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("app.main.get_db", AsyncMock(return_value=mock_db)),
+        patch("app.main.download_to_path", new_callable=AsyncMock),
+        patch("app.main.unzip_to_dir"),
+        patch("app.main._scan_repo_dir", side_effect=blocking_scan),
+        patch("app.main._extract_dependencies", return_value=[]),
+        patch("app.main._apply_fp_predictor", new_callable=AsyncMock),
+    ):
+        scan_task = asyncio.create_task(
+            main._run_repo_scan_task(
+                asyncio.Semaphore(1),
+                "job-1",
+                "https://github.com/acme/repo",
+                "main",
+                "repo",
+                "org-1",
+            )
+        )
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            started_at = time.perf_counter()
+            response = await c.get("/health")
+            elapsed = time.perf_counter() - started_at
+
+        await scan_task
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
 
 
 @patch("app.main.get_db", new_callable=AsyncMock)

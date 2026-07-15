@@ -10,6 +10,7 @@ import random
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ import aiosqlite
 import httpx
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     File,
     Form,
@@ -32,10 +34,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
-
-from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
-from app.ml.fp_predictor import predictor
-from app.ml.ranker import load_ranker, scoring_function
 
 from .db import (
     create_findings,
@@ -54,6 +52,9 @@ from .db import (
     update_job_status,
     upsert_contributor_stat,
 )
+from .ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+from .ml.fp_predictor import predictor
+from .ml.ranker import load_ranker, scoring_function
 from .models import (
     Finding,
     FindingStatusUpdate,
@@ -75,7 +76,8 @@ from .scanners.entropy import run_entropy
 from .scanners.gitleaks import run_gitleaks
 from .scanners.osv import run_osv_scanner
 from .scanners.semgrep import run_semgrep
-from .utils.fs import ensure_dir, safe_rmtree, unzip_to_dir
+from .security import verify_api_key
+from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
@@ -126,6 +128,8 @@ ensure_dir(WORK_ROOT)
 @app.on_event("startup")
 async def startup():
     await init_db()
+    # Start background cleanup for finished ACTIVE_SCANS entries
+    asyncio.create_task(_cleanup_active_scans_loop())
 
 
 @app.get("/health")
@@ -264,15 +268,29 @@ def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
     return deps
 
 
-ACTIVE_SCANS = {}
+ACTIVE_SCANS: dict[str, dict] = {}
 ORG_CANCEL_EVENTS = {}
+
+# How long to keep completed/failed scan progress in memory for SSE clients.
+# After this TTL, entries are removed to prevent unbounded growth.
+_ACTIVE_SCANS_RETENTION_SECONDS_RAW = os.environ.get("ACTIVE_SCANS_RETENTION_SECONDS")
+try:
+    ACTIVE_SCANS_RETENTION_SECONDS = (
+        int(_ACTIVE_SCANS_RETENTION_SECONDS_RAW)
+        if _ACTIVE_SCANS_RETENTION_SECONDS_RAW
+        else 600
+    )
+except ValueError:
+    ACTIVE_SCANS_RETENTION_SECONDS = 600
+
+ACTIVE_SCANS_RETENTION_SECONDS = max(1, ACTIVE_SCANS_RETENTION_SECONDS)
 
 
 def _scan_repo_dir(
     repo_dir: Path,
     progress_cb=None,
     job_dir: Path = None,
-    cancel_event: asyncio.Event = None,
+    cancel_event: threading.Event = None,
     raw_dir_name: str = "raw",
 ):
     if cancel_event and cancel_event.is_set():
@@ -313,11 +331,11 @@ def _scan_repo_dir(
     if progress_cb:
         progress_cb("secrets", "completed")
 
-    entropy = run_entropy(repo_dir)
-
-    findings: List[Finding] = []
+    findings = []
     findings.extend(semgrep)
     findings.extend(osv)
+    entropy = run_entropy(repo_dir)
+
     findings.extend(gitleaks)
     findings.extend(entropy)
 
@@ -332,6 +350,37 @@ def _scan_repo_dir(
         findings = _prioritize_findings(findings)
 
     return semgrep, osv, gitleaks, entropy, findings
+
+
+async def _cleanup_active_scans_loop() -> None:
+    """Periodically remove finished scan entries from ACTIVE_SCANS.
+
+    This prevents unbounded memory growth in long-running deployments.
+    """
+    while True:
+        try:
+            cutoff = (
+                datetime.now(timezone.utc).timestamp() - ACTIVE_SCANS_RETENTION_SECONDS
+            )
+            # Copy keys to avoid mutating while iterating.
+            for job_id in list(ACTIVE_SCANS.keys()):
+                state = ACTIVE_SCANS.get(job_id)
+                if not state:
+                    continue
+                status = state.get("status")
+                if status not in {"completed", "failed", "aborted"}:
+                    continue
+
+                finished_at = state.get("finished_at")
+                if finished_at is None:
+                    # If finished_at is missing, keep entry for safety.
+                    continue
+
+                if finished_at <= cutoff:
+                    ACTIVE_SCANS.pop(job_id, None)
+        except Exception:
+            logger.exception("ACTIVE_SCANS cleanup loop error")
+        await asyncio.sleep(30)
 
 
 def finding_key(f: Finding):
@@ -381,7 +430,10 @@ MAX_REDIRECTS = 5
 
 
 async def download_to_path(
-    url: str, dest_path: Path, max_retries: int = 5, cancel_event: asyncio.Event = None
+    url: str,
+    dest_path: Path,
+    max_retries: int = 5,
+    cancel_event: threading.Event = None,
 ) -> None:
     """
     Download *url* to *dest_path*, following redirects only to hosts in
@@ -537,7 +589,7 @@ async def _run_single_scan_task(
         finally:
             await db.close()
 
-        job_dir = WORK_ROOT / job_id
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
         semgrep, osv, gitleaks, entropy, findings = await run_in_threadpool(
             functools.partial(
                 _scan_repo_dir, scan_root, update_progress, job_dir=job_dir
@@ -607,10 +659,14 @@ async def _run_single_scan_task(
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "completed"
             ACTIVE_SCANS[job_id]["findings_count"] = finding_count
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
     except Exception:
         logger.exception("Failed scan task for %s", job_id)
         if job_id in ACTIVE_SCANS:
             ACTIVE_SCANS[job_id]["status"] = "failed"
+            ACTIVE_SCANS[job_id]["finished_at"] = datetime.now(timezone.utc).timestamp()
+
         try:
             db = await get_db()
             try:
@@ -868,7 +924,11 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
     fixes for detected security issues. Generated fixes are returned
     immediately and stored asynchronously for later reporting.
     """
-    job_dir = WORK_ROOT / req.job_id
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, req.job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
@@ -935,7 +995,11 @@ async def verify(
     determine whether fixes were successful and whether any new
     vulnerabilities were introduced.
     """
-    job_dir = WORK_ROOT / job_id
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
@@ -943,6 +1007,12 @@ async def verify(
     repo_dir = _maybe_use_single_top_folder(repo_dir)
 
     result = verify_repo(repo_dir)
+
+    if baseline_job_id is not None:
+        try:
+            safe_job_dir(WORK_ROOT, baseline_job_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     baseline_job_id = baseline_job_id or job_id
     baseline_findings = await get_baseline_findings(baseline_job_id)
@@ -1037,7 +1107,11 @@ def evidence_pack(
     supporting artifacts that can be used for auditing, compliance,
     or sharing scan results.
     """
-    job_dir = WORK_ROOT / job_id
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     repo_dir = job_dir / "repo"
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
@@ -1066,7 +1140,11 @@ def evidence_pack(
     )
 
 
-@app.get("/api/scans/{job_id}/report/pdf", tags=["Reports"])
+@app.get(
+    "/api/scans/{job_id}/report/pdf",
+    tags=["Reports"],
+    dependencies=[Depends(verify_api_key)],
+)
 async def download_audit_pdf(job_id: str):
     db = await get_db()
     try:
@@ -1117,7 +1195,10 @@ async def download_audit_pdf(job_id: str):
     )
 
 
-@app.get("/jobs/{job_id}/findings")
+@app.get(
+    "/jobs/{job_id}/findings",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_findings(job_id: str):
     db = await get_db()
     try:
@@ -1212,7 +1293,10 @@ async def update_finding_status_endpoint(finding_id: str, payload: FindingStatus
     return {"id": finding_id, "status": payload.status}
 
 
-@app.get("/jobs/{job_id}/verify")
+@app.get(
+    "/jobs/{job_id}/verify",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_verify(job_id: str):
     db = await get_db()
     try:
@@ -1247,32 +1331,49 @@ async def get_verify(job_id: str):
 
 @app.delete("/jobs/{job_id}")
 async def delete_job_endpoint(job_id: str):
-    job_dir = WORK_ROOT / job_id
-    if job_dir.exists():
-        safe_rmtree(job_dir)
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    safe_rmtree(job_dir)
+
     db = await get_db()
     try:
         await delete_job(db, job_id)
     finally:
         await db.close()
+
     return {"deleted": True}
 
 
-@app.get("/trends")
+@app.get(
+    "/trends",
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_trends_endpoint(limit: int = 6):
     """Fetches historical trend data for the frontend dashboard."""
     data = await get_trend_data(limit)
     return data
 
 
-@app.get("/cwe-distribution")
+@app.get(
+    "/cwe-distribution",
+    dependencies=[Depends(verify_api_key)],
+)
 async def cwe_distribution_endpoint():
     """Fetches the vulnerability distribution for the frontend donut chart."""
     data = await get_cwe_distribution()
     return data
 
 
-@app.get("/dependency-diff")
+@app.get(
+    "/dependency-diff",
+    dependencies=[Depends(verify_api_key)],
+)
 async def dependency_diff_endpoint():
     data = await get_dependency_diff()
     return data
@@ -1290,13 +1391,19 @@ class LeaderboardUpdateRequest(BaseModel):
     is_pr_merged: bool = False
 
 
-@app.get("/leaderboard")
+@app.get(
+    "/leaderboard",
+    dependencies=[Depends(verify_api_key)],
+)
 async def leaderboard_endpoint():
     data = await get_leaderboard_stats()
     return data
 
 
-@app.post("/leaderboard/update")
+@app.post(
+    "/leaderboard/update",
+    dependencies=[Depends(verify_api_key)],
+)
 async def update_leaderboard_endpoint(req: LeaderboardUpdateRequest):
     pattern = r"(?i)(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)"
     matches = re.findall(pattern, req.pr_description)
@@ -1350,7 +1457,7 @@ async def _run_repo_scan_task(
     ref: str,
     project_name: str,
     org_job_id: str,
-    cancel_event: asyncio.Event = None,
+    cancel_event: threading.Event = None,
 ):
     async with sem:
         try:
@@ -1372,7 +1479,7 @@ async def _run_repo_scan_task(
             finally:
                 await db.close()
 
-            job_dir = WORK_ROOT / job_id
+            job_dir = safe_job_dir(WORK_ROOT, job_id)
             ensure_dir(job_dir)
             archive_path = job_dir / "repo.zip"
             repo_dir = job_dir / "repo"
@@ -1486,7 +1593,7 @@ async def _run_repo_scan_task(
 
 
 async def _run_org_batch(org_job_id: str, repos: List[dict]):
-    cancel_event = asyncio.Event()
+    cancel_event = threading.Event()
     ORG_CANCEL_EVENTS[org_job_id] = cancel_event
 
     db = await get_db()
@@ -1531,7 +1638,7 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
             )
         )
 
-    cancel_task = asyncio.create_task(cancel_event.wait())
+    cancel_task = asyncio.create_task(asyncio.to_thread(cancel_event.wait))
     wait_tasks = asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
 
     try:
@@ -1557,6 +1664,7 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
         else:
             cancel_task.cancel()
     finally:
+        cancel_task.cancel()
         ORG_CANCEL_EVENTS.pop(org_job_id, None)
 
     db = await get_db()
@@ -1575,7 +1683,10 @@ async def _run_org_batch(org_job_id: str, repos: List[dict]):
         await db.close()
 
 
-@app.post("/api/scans/org")
+@app.post(
+    "/api/scans/org",
+    dependencies=[Depends(verify_api_key)],
+)
 async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     m = re.match(
         r"^https?://github\.com/([^/]+)/?$", req.org_url.strip(), re.IGNORECASE
@@ -1607,7 +1718,11 @@ async def scan_org(req: OrgScanRequest, background_tasks: BackgroundTasks):
     return {"org_job_id": org_job_id, "org_name": org_name, "repo_count": len(repos)}
 
 
-@app.get("/api/scans/org/{org_job_id}/status", response_model=OrgJobStatusResponse)
+@app.get(
+    "/api/scans/org/{org_job_id}/status",
+    response_model=OrgJobStatusResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def get_org_status(org_job_id: str):
     db = await get_db()
     try:
