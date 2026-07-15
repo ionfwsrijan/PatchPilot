@@ -225,7 +225,9 @@ class TestDeleteJob:
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
     def test_delete_success(self, mock_rmtree, mock_safe_job_dir):
-        mock_job_dir = AsyncMock()
+        from unittest.mock import MagicMock
+
+        mock_job_dir = MagicMock()
         mock_job_dir.exists.return_value = True
         mock_safe_job_dir.return_value = mock_job_dir
 
@@ -251,7 +253,9 @@ class TestDeleteJob:
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
     def test_delete_missing_directory(self, mock_rmtree, mock_safe_job_dir):
-        mock_job_dir = AsyncMock()
+        from unittest.mock import MagicMock
+
+        mock_job_dir = MagicMock()
         mock_job_dir.exists.return_value = False
         mock_safe_job_dir.return_value = mock_job_dir
 
@@ -274,7 +278,9 @@ class TestDeleteJob:
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
     def test_delete_db_failure(self, mock_rmtree, mock_safe_job_dir):
-        mock_job_dir = AsyncMock()
+        from unittest.mock import MagicMock
+
+        mock_job_dir = MagicMock()
         mock_job_dir.exists.return_value = True
         mock_safe_job_dir.return_value = mock_job_dir
 
