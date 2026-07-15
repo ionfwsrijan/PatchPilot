@@ -1306,7 +1306,7 @@ async def delete_job_endpoint(job_id: str):
     db = await get_db()
     try:
         await delete_job(db, job_id)
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to delete job {job_id} from db")
         raise HTTPException(status_code=500, detail="Database error during deletion")
     finally:
