@@ -1,7 +1,16 @@
 import { useRef, useState, useEffect } from "react";
 import { Upload, Link as LinkIcon, Clock, Trash2, Download, Loader2, CheckCircle, AlertTriangle, Building2, Layers } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { scanRepoUrl, scanZip, downloadAuditReport, scanOrganization, getOrgJobStatus, abortOrganizationScan, API_BASE } from "../lib/api";
+import {
+  scanRepoUrl,
+  scanZip,
+  downloadAuditReport,
+  scanOrganization,
+  getOrgJobStatus,
+  abortOrganizationScan,
+  API_BASE,
+  compareSecurityRegression,
+} from "../lib/api";
 import { saveLastScan } from "../lib/scan-store";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -24,8 +33,215 @@ import { RecentScans } from "../components/dashboard/RecentScans";
 export function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [dragActive, setDragActive] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  const [recentJobs, setRecentJobs] = useState<UiJob[]>(() =>
+    getLocalRecentJobs(),
+  );
+  const [regressionData, setRegressionData] = useState<any>(null);
+  const [regressionError, setRegressionError] = useState("");
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [orgDialogOpen, setOrgDialogOpen] = useState(false);
+  const [orgUrl, setOrgUrl] = useState("");
+  const [activeOrgJobId, setActiveOrgJobId] = useState<string | null>(null);
+  const [orgStatusData, setOrgStatusData] = useState<any>(null);
+  const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [isAborting, setIsAborting] = useState(false);
+  const [expectedRepoCount, setExpectedRepoCount] = useState<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [eventSource]);
+
+  const formatTimestamp = (timestamp: string) => {
+    const date = new Date(timestamp);
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  };
+
+  const handleScanSuccess = async (scan: {
+    job_id: string;
+    project_name: string;
+    findings?: any[];
+  }) => {
+    saveLastScan(scan as any);
+
+    const job: UiJob = {
+      id: scan.job_id,
+      repoName: scan.project_name,
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      duration: "-",
+      findingsCount: scan.findings?.length ?? 0,
+    };
+
+    saveLocalRecentJob(job);
+
+  const updatedJobs = getLocalRecentJobs();
+  setRecentJobs(updatedJobs);
+
+  if (updatedJobs.length > 1) {
+   try {
+    const result = await compareSecurityRegression(
+      updatedJobs[1].id,   // previous scan
+      updatedJobs[0].id,   // current scan
+    );
+
+    setRegressionData(result);
+    setRegressionError("");
+   } catch {
+     setRegressionError("Unable to compare security regression.");
+   }
+  }
+  navigate("/findings");
+  };
+  const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);
+  const [singleScanState, setSingleScanState] = useState<any>(null);
+
+  const watchSingleScan = (jobId: string, projectName: string) => {
+    setActiveSingleScanId(jobId);
+    setSingleScanState({ sast: 'pending', dependency: 'pending', secrets: 'pending', status: 'running' });
+
+    if (eventSource) eventSource.close();
+    const sse = new EventSource(`${API_BASE}/api/scans/${jobId}/stream`);
+
+    sse.onmessage = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.error) {
+        sse.close();
+        setScanLoading(false);
+        setScanError("Live scan tracking failed.");
+        setActiveSingleScanId(null);
+        return;
+      }
+      setSingleScanState(parsed);
+
+if (parsed.status === "completed" || parsed.status === "failed") {
+        sse.close();
+        setTimeout(async () => {
+          try {
+            const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+            const data = await res.json();
+            setScanLoading(false);
+            handleScanSuccess({ job_id: jobId, project_name: projectName, findings: data.findings || [] });
+            setActiveSingleScanId(null);
+          } catch (err) {
+            setScanLoading(false);
+            handleScanSuccess({ job_id: jobId, project_name: projectName, findings: [] });
+            setActiveSingleScanId(null);
+          }
+        }, 1000);
+      }
+    };
+    sse.onerror = () => {
+      if (sse.readyState === EventSource.CLOSED) setScanLoading(false);
+    };
+    setEventSource(sse);
+  };
+
+  const handleZipFile = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setScanError("Please upload a .zip file.");
+      return;
+    }
+    setScanError(null);
+    setScanLoading(true);
+
+    try {
+      const initRes = await scanZip(file, file.name.replace(/\.zip$/i, ""));
+      watchSingleScan(initRes.job_id, initRes.project_name);
+    } catch (e: any) {
+      setScanError(e?.message ?? "Scan failed");
+      setScanLoading(false);
+    }
+  };
+
+  const handleImportFromUrl = async () => {
+    const url = repoUrl.trim();
+    if (!url) {
+      setScanError("Please paste a GitHub repo URL.");
+      return;
+    }
+    setScanError(null);
+    setScanLoading(true);
+
+    try {
+      const initRes = await scanRepoUrl(url, repoRef || "main", "project");
+      setUrlDialogOpen(false);
+      setRepoUrl("");
+      setRepoRef("main");
+      watchSingleScan(initRes.job_id, initRes.project_name);
+    } catch (e: any) {
+      setScanError(e?.message ?? "Import from URL failed");
+      setScanLoading(false);
+    }
+  };
+
+  const handleScanOrg = async () => {
+    const url = orgUrl.trim();
+    if (!url) {
+      setScanError("Please enter a valid GitHub Organization URL.");
+      return;
+    }
+
+    setScanError(null);
+    setScanLoading(true);
+    if (eventSource) {
+      eventSource.close();
+      setEventSource(null);
+    }
+
+    try {
+      const data = await scanOrganization(url);
+      setActiveOrgJobId(data.org_job_id);
+      setExpectedRepoCount(data.repo_count);
+      setOrgDialogOpen(false);
+
+      getOrgJobStatus(data.org_job_id).then(setOrgStatusData).catch(() => {});
+
+      const sse = new EventSource(`${API_BASE}/api/scans/org/${data.org_job_id}/stream`);
+      
+      sse.onmessage = (event) => {
+        const parsed = JSON.parse(event.data);
+        if (parsed.error) {
+          sse.close();
+          setScanLoading(false);
+          return;
+        }
+        
+        setOrgStatusData(parsed);
+        const isFullyFinished = 
+          ["completed", "failed"].includes(parsed.status) || 
+          (parsed.status === "aborted" && !parsed.repos.some((r: any) => r.status === "scanning" || r.status === "pending"));
+
+        if (isFullyFinished) {
+          sse.close();
+          setScanLoading(false);
+        }
+      };
+
+      sse.onerror = () => {
+        if (sse.readyState === EventSource.CLOSED) {
+          setScanLoading(false);
+        }
+      };
+
+      setEventSource(sse);
+    } catch (e: any) {
+      setScanError(e?.message ?? "Organization batch scan failed");
+      setScanLoading(false);
+    }
+  };
 
   const { recentJobs, handleScanSuccess, onClearRecents } = useRecentJobs();
   
@@ -183,4 +399,6 @@ export function Dashboard() {
       />
     </div>
   );
-}
+
+  }
+

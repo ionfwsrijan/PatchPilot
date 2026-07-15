@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .regression import compare_scans
 
 import asyncio
 import functools
@@ -14,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+
 
 import aiosqlite
 import httpx
@@ -146,6 +148,37 @@ def health():
         "scanners": scanners,
     }
 
+@app.get("/api/security/regression")
+async def security_regression(
+    baseline_job_id: str,
+    current_job_id: str,
+):
+    async with await get_db() as db:
+        baseline_findings = await get_findings_by_job_id(db, baseline_job_id)
+        current_findings = await get_findings_by_job_id(db, current_job_id)
+
+    if not baseline_findings:
+        raise HTTPException(
+            status_code=404,
+            detail="Baseline scan not found.",
+        )
+
+    if not current_findings:
+        raise HTTPException(
+            status_code=404,
+            detail="Current scan not found.",
+        )
+
+    result = compare_scans(
+        baseline_findings,
+        current_findings,
+    )
+
+    return {
+        "baseline_scan": baseline_job_id,
+        "current_scan": current_job_id,
+        **result,
+    }
 
 @app.get("/api/health/ollama", tags=["Health"])
 async def ollama_health():
