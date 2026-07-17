@@ -33,11 +33,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
-from app.ml.ranker import load_ranker, scoring_function
-from app.policy.evaluator import evaluate_policy
-from app.policy.parser import parse_policy
-
 from .db import (
     create_findings,
     create_job,
@@ -71,6 +66,8 @@ from .models import (
     ScanResponse,
     VerifyResponse,
 )
+from .policy.evaluator import evaluate_policy
+from .policy.parser import parse_policy
 from .remediation.engine import propose_fixes
 from .reports.evidence_pack import build_evidence_pack
 from .reports.pdf_builder import generate_audit_pdf, generate_org_audit_pdf
@@ -685,13 +682,8 @@ async def _run_single_scan_task(
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
-    project: UploadFile = File(...),
+    project: UploadFile = File(...,description="ZIP archive containing the project source code to scan.",),
     policy: UploadFile | None = File(None),
-    project_name: str = Form("project"),
-    project: UploadFile = File(
-        ...,
-        description="ZIP archive containing the project source code to scan.",
-    ),
     project_name: str = Form(
         "project",
         description="Display name assigned to the uploaded project.",
