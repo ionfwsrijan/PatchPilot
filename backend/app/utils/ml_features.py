@@ -1,6 +1,6 @@
 # app/utils/ml_features.py
 import re
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def extract_features(raw_finding: dict, scanner_name: str) -> Dict[str, Any]:

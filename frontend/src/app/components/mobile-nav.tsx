@@ -11,10 +11,10 @@ export function MobileNav() {
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card">
       <div className="grid grid-cols-3 h-16">
         <Link
-          to="/"
+          to="/dashboard"
           className={cn(
             "flex flex-col items-center justify-center gap-1 transition-colors",
-            isActive("/")
+            isActive("/dashboard")
               ? "text-primary"
               : "text-muted-foreground hover:text-foreground",
           )}

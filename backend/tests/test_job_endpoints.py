@@ -20,7 +20,10 @@ FINDINGS_COLS = (
     "cwe",
     "scanner",
     "message",
+    "package_name",
+    "package_version",
     "created_at",
+    "ml_score",
 )
 VERIFY_COLS = ("id", "job_id", "passed", "new_issues_introduced", "verified_at")
 
@@ -35,7 +38,10 @@ FINDINGS = [
         None,
         "semgrep",
         "Hardcoded secret detected",
+        None,
+        None,
         "2024-01-01 00:00:00",
+        0.85,
     ),
     (
         str(uuid.uuid4()),
@@ -47,7 +53,10 @@ FINDINGS = [
         None,
         "osv",
         "Vulnerable dependency",
+        None,
+        None,
         "2024-01-01 00:00:01",
+        None,
     ),
     (
         str(uuid.uuid4()),
@@ -59,7 +68,10 @@ FINDINGS = [
         None,
         "gitleaks",
         "API key exposed",
+        None,
+        None,
         "2024-01-01 00:00:02",
+        0.95,
     ),
 ]
 
@@ -140,7 +152,15 @@ class TestGetFindings:
         f = res.json()["findings"][0]
         assert all(
             k in f
-            for k in ("id", "rule_id", "severity", "category", "scanner", "message")
+            for k in (
+                "id",
+                "rule_id",
+                "severity",
+                "category",
+                "scanner",
+                "message",
+                "ml_score",
+            )
         )
 
 
@@ -171,3 +191,31 @@ class TestGetVerify:
             res = client.get(f"/jobs/{JOB_ID}/verify")
         assert res.status_code == 404
         assert "No verify outcome" in res.json()["detail"]
+
+
+class TestStreamSingleScan:
+    def test_stream_job_not_found(self):
+        with client.stream("GET", "/api/scans/invalid_job/stream") as response:
+            assert response.status_code == 200
+            content = next(response.iter_lines())
+            assert "error" in content
+            assert "Job not found" in content
+
+    def test_stream_job_completed(self):
+        from app.main import ACTIVE_SCANS
+
+        ACTIVE_SCANS[JOB_ID] = {
+            "status": "completed",
+            "sast": "completed",
+            "dependency": "completed",
+            "secrets": "completed",
+            "findings_count": 5,
+        }
+        with client.stream("GET", f"/api/scans/{JOB_ID}/stream") as response:
+            assert response.status_code == 200
+            content = next(response.iter_lines())
+            assert '"status": "completed"' in content
+            assert '"findings_count": 5' in content
+
+        if JOB_ID in ACTIVE_SCANS:
+            del ACTIVE_SCANS[JOB_ID]

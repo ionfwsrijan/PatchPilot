@@ -1,6 +1,13 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.8.2
+fpdf2==2.8.1
 python-multipart==0.0.9
 httpx
 aiosqlite
+joblib
+pandas
+scikit-learn
+starlette<1.0.0
+sentence-transformers
+numpy

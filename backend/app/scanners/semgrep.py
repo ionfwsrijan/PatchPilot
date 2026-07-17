@@ -3,23 +3,32 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import List
-from ..models import Finding, Location
-from ..utils.exec import run_cmd
 
+from ..models import Finding, Location
+from ..utils.categories import normalize_category
+from ..utils.exec import run_cmd
 from ..utils.ml_features import extract_features
 
-SEMGRP_CONFIG = "p/ci"
+SEMGREP_CONFIGS = ["p/ci", "p/dockerfile", "p/terraform", "p/github-actions"]
 
 
-def run_semgrep(repo_dir: Path) -> List[Finding]:
-    cmd = ["semgrep", "--config", SEMGRP_CONFIG, "--json", "--quiet"]
+def run_semgrep(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
+    cmd = ["semgrep"]
+    for conf in SEMGREP_CONFIGS:
+        cmd.extend(["--config", conf])
+    cmd.extend(["--json", "--quiet"])
     r = run_cmd(cmd, cwd=repo_dir, timeout_s=600)
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(r.get("stdout", ""), encoding="utf-8")
 
     if r["returncode"] not in (0, 1):
         return [
             Finding(
                 id="semgrep:error",
-                category="sast",
+                category=normalize_category("sast"),
                 severity="INFO",
                 title="Semgrep failed to run",
                 description=r["stderr"][:5000],
@@ -42,11 +51,14 @@ def run_semgrep(repo_dir: Path) -> List[Finding]:
         msg = extra.get("message", "")
         raw_severity = (extra.get("severity") or "INFO").upper()
 
-        severity = (
-            raw_severity
-            if raw_severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
-            else "INFO"
-        )
+        if raw_severity == "ERROR":
+            severity = "HIGH"
+        elif raw_severity == "WARNING":
+            severity = "MEDIUM"
+        elif raw_severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
+            severity = raw_severity
+        else:
+            severity = "INFO"
         finding_id = f"semgrep:{check_id}:{path}:{start}"
 
         cwe_data = (extra.get("metadata") or {}).get("cwe", "unknown")
@@ -68,7 +80,7 @@ def run_semgrep(repo_dir: Path) -> List[Finding]:
         out.append(
             Finding(
                 id=finding_id,
-                category="sast",
+                category=normalize_category("sast"),
                 severity=severity,
                 title=check_id,
                 description=msg,

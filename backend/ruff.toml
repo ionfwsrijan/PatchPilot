@@ -1,0 +1,20 @@
+# backend/ruff.toml
+
+[lint]
+select = [
+    "F",   # Unused imports and undefined variables
+    "E",   # Standard PEP8 style errors
+    "I",   # Auto-sorts imports
+    "N",   # Enforces strict naming conventions
+    "D",   # Enforces docstrings
+]
+
+ignore = [
+    "D100", "D101", "D102", "D103", "D104", "D203", "D205", "D212", "D415",
+    "E501", # Ignore line too long for existing SQL queries
+    "N806", # Ignore uppercase variable names (like X_train) in ML scripts
+    "N803"  # Ignore uppercase argument names in ML scripts
+]
+
+[lint.pydocstyle]
+convention = "google"

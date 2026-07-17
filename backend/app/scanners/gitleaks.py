@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import List
+
 from ..models import Finding, Location
+from ..utils.categories import normalize_category
 from ..utils.exec import run_cmd
 from ..utils.ml_features import extract_features
 
 
-def run_gitleaks(repo_dir: Path) -> List[Finding]:
+def run_gitleaks(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
     cmd = [
         "gitleaks",
         "detect",
@@ -27,13 +29,18 @@ def run_gitleaks(repo_dir: Path) -> List[Finding]:
             return [
                 Finding(
                     id="gitleaks:error",
-                    category="secret",
+                    category=normalize_category("secret"),
                     severity="INFO",
                     title="Gitleaks failed to run",
                     description=r["stderr"][:5000],
                 )
             ]
         return []
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
 
     try:
         data = json.loads(report.read_text(encoding="utf-8") or "[]")
@@ -63,7 +70,7 @@ def run_gitleaks(repo_dir: Path) -> List[Finding]:
         out.append(
             Finding(
                 id=finding_id,
-                category="secret",
+                category=normalize_category("secret"),
                 severity=severity,
                 title=f"Secret detected: {rule}",
                 description=str(desc)[:1000],

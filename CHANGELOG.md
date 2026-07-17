@@ -12,7 +12,7 @@ _Changes on `main` that haven't been tagged yet will appear here._
 
 ---
 
-## [0.1.0] — 2026-05-26
+## [0.1.0] — 2026-05-27
 
 Initial public release.
 

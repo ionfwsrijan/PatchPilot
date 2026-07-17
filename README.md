@@ -42,6 +42,12 @@ Everything runs locally. No data leaves your machine.
 **Backend**
 - Python 3.10+
 - `semgrep`, `osv-scanner`, and `gitleaks` available on `PATH`
+   - **semgrep**: `pip install semgrep`.
+   - **osv-scanner**: Download from the latest GitHub release and place it in a directory on your `PATH`.
+   - **gitleaks**: Install via `brew install gitleaks` (macOS/Linux) or download from the latest GitHub release.
+
+> **Note:** If the backend starts in "degraded mode," it means it cannot find these scanner executables. Ensure they are installed and their locations are included in your system's `PATH` environment variable.
+
 
 **Frontend**
 - Node.js 18+
@@ -53,6 +59,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -r requirements-ml.txt # Required for ML features (ranking, deduplication)
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -130,6 +137,10 @@ PatchPilot/
 └── LICENSE
 ```
 
+## Architecture
+
+Want to understand how the internal components communicate? Check out the [ARCHITECTURE.md](ARCHITECTURE.md) document for Mermaid diagrams and details on the Scan, Fix, and Verify pipelines, database schema, and ML roadmap flow.
+
 ---
 
 ## Contributing
@@ -140,9 +151,29 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, branch conventio
 
 For questions and ideas, open a [Discussion](https://github.com/ionfwsrijan/PatchPilot/discussions) rather than an issue.
 
+## Mentors
+
+Special thanks to the mentors helping guide contributors and review changes.
+
+- <img src="https://github.com/ionfwsrijan.png?size=40" width="40" height="40" alt="@ionfwsrijan"/> @ionfwsrijan
+- <img src="https://github.com/arpit2006.png?size=40" width="40" height="40" alt="@arpit2006"/> @arpit2006
+
+
+## Contributors
+
+Thanks to all our contributors ❤️
+
+<a href="https://github.com/ionfwsrijan/PatchPilot/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=ionfwsrijan/PatchPilot" />
+</a>
+
+---
+
 ## Security
 
 Found a vulnerability in PatchPilot itself? Please **do not** open a public issue. Read [SECURITY.md](SECURITY.md) for the responsible disclosure process.
+
+---
 
 ## License
 

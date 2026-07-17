@@ -81,3 +81,6 @@ Thumbs.db
 # ───────────────────────────────────────────
 *.log
 logs/
+
+# Machine Learning Models
+backend/app/ml/*.pkl

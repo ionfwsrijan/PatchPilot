@@ -1,4 +1,4 @@
-const API_BASE =
+export const API_BASE =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ||
   "http://localhost:8000";
 
@@ -18,7 +18,6 @@ export async function getHealth() {
   return (await res.json()) as HealthResponse;
 }
 
-
 export type ScanResponse = {
   job_id: string;
   project_name: string;
@@ -32,14 +31,38 @@ export type BackendFinding = {
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO";
   category: string;
   title: string;
-  file: string;
-  line: number;
-  tool: "semgrep" | "osv" | "gitleaks" | string;
-  confidence?: number;
   description?: string;
+
+  location?: {
+    path?: string;
+    start_line?: number;
+    end_line?: number;
+  };
+
+  metadata?: {
+    engine?: string;
+    [key: string]: unknown;
+  };
+
+  reachability?: {
+  reachable?: boolean;
+  reason?: string;
+};
+
+features?: Record<string, unknown>;
+  confidence?: number;
   code?: string;
   suggested_fix?: string;
   references?: string[];
+  ml_score?: number;
+  false_positive?: boolean | number | null;
+  version?: number;
+};
+
+export type ScanInitResponse = {
+  job_id: string;
+  project_name: string;
+  status: string;
 };
 
 export async function scanZip(file: File, projectName = "project") {
@@ -52,11 +75,8 @@ export async function scanZip(file: File, projectName = "project") {
     body: form,
   });
 
-  if (!res.ok) {
-    throw new Error(await res.text());
-  }
-
-  return (await res.json()) as ScanResponse;
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as ScanInitResponse;
 }
 
 export async function scanRepoUrl(
@@ -79,7 +99,44 @@ export async function scanRepoUrl(
     throw new Error(err?.detail ?? "Import from URL failed");
   }
 
-  return (await res.json()) as ScanResponse;
+  return (await res.json()) as ScanInitResponse;
+}
+export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
+  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as BackendFinding[];
+}
+
+export async function labelFinding(
+  findingId: string,
+  falsePositive: boolean,
+  expectedVersion: number,
+  signal?: AbortSignal,
+) {
+  const res = await fetch(`${API_BASE}/findings/${findingId}/label`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ false_positive: falsePositive, expected_version: expectedVersion }),
+    signal,
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    const error = new Error(errText);
+    (error as any).status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
+export async function updateFindingStatus(findingId: string, status: "open" | "accepted" | "ignored") {
+  const res = await fetch(`${API_BASE}/findings/${findingId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function fix(jobId: string, findingIds: string[]) {
@@ -206,5 +263,112 @@ export async function updateLeaderboard(data: LeaderboardUpdateRequest) {
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function downloadAuditReport(jobId: string) {
+  const res = await fetch(`${API_BASE}/api/scans/${jobId}/report/pdf`);
+  
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  const blob = await res.blob();
+  return { blob, filename: `PatchPilot-Audit-${jobId}.pdf` };
+}
+
+export type RepoStatus = {
+  job_id: string;
+  project_name: string;
+  status: "pending" | "scanning" | "completed" | "failed" | "aborted";
+};
+
+export type OrgJobStatusResponse = {
+  org_job_id: string;
+  status: "pending" | "scanning" | "completed" | "failed" | "aborted";
+  repos: RepoStatus[];
+};
+
+export async function scanOrganization(orgUrl: string) {
+  const res = await fetch(`${API_BASE}/api/scans/org`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ org_url: orgUrl }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return (await res.json()) as { org_job_id: string; org_name: string; repo_count: number };
+}
+
+export async function getOrgJobStatus(orgJobId: string) {
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/status`);
+
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  return (await res.json()) as OrgJobStatusResponse;
+}
+
+export const abortOrganizationScan = async (orgJobId: string, mode: "pending" | "force" = "pending") => {
+  const response = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/abort?mode=${mode}`, {
+    method: "POST",
+  });
+  if (!response.ok) throw new Error("Failed to abort scan");
+  return response.json();
+};
+
+export async function getOrgSummary(orgJobId: string) {
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/summary`);
+  if (!res.ok) throw new Error("Failed to fetch organization summary");
+  return res.json();
+}
+
+export async function getOrgFindings(orgJobId: string) {
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/findings`);
+  if (!res.ok) throw new Error("Failed to fetch organization findings");
+  return res.json();
+}
+
+export async function downloadOrgAuditReport(orgJobId: string) {
+  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/report/pdf`);
+  
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+
+  const blob = await res.blob();
+  
+  const cd = res.headers.get("content-disposition") || "";
+  const match = cd.match(/filename="?([^"]+)"?/i);
+  const filename = match?.[1] || `PatchPilot-Org-Audit-${orgJobId}.pdf`;
+
+  return { blob, filename };
+}
+
+export const getOrgBlastRadius = async (orgJobId: string) => {
+  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  const response = await fetch(`${baseUrl}/api/scans/org/${orgJobId}/blast-radius`);
+  
+  if (!response.ok) {
+    throw new Error('Failed to fetch blast radius data');
+  }
+  return response.json();
+};
+
+export interface OllamaHealthResponse {
+  available: boolean;
+  models: string[];
+  base_url: string;
+}
+
+export async function getOllamaHealth(): Promise<OllamaHealthResponse> {
+  const res = await fetch(`${API_BASE}/api/health/ollama`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
   return res.json();
 }
