@@ -7,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { TrendChart } from "../components/trend-chart";
 import { CweChart } from "../components/cwe-chart"
 import { DependencyDiff } from "../components/dependency-diff";
+import { toast } from "sonner";
 import {
   Card,
   CardContent,
@@ -25,7 +26,6 @@ import {
 import { StatusPill } from "../components/status-pill";
 import { Input } from "../components/ui/input";
 import { cn } from "../components/ui/utils";
-
 type UiJobStatus = "completed" | "running" | "failed" | "pending";
 
 type UiJob = {
@@ -66,7 +66,6 @@ export function Dashboard() {
 
   const [dragActive, setDragActive] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
 
   const [recentJobs, setRecentJobs] = useState<UiJob[]>(() =>
     getLocalRecentJobs(),
@@ -104,24 +103,22 @@ export function Dashboard() {
 
     saveLocalRecentJob(job);
     setRecentJobs(getLocalRecentJobs());
-
+    toast.success("Scan completed successfully!");
     navigate("/findings");
   };
 
   const handleZipFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".zip")) {
-      setScanError("Please upload a .zip file.");
+      toast.error("Please upload a .zip file.");
       return;
     }
-
-    setScanError(null);
     setScanLoading(true);
 
     try {
       const scan = await scanZip(file, file.name.replace(/\.zip$/i, ""));
       handleScanSuccess(scan);
     } catch (e: any) {
-      setScanError(e?.message ?? "Scan failed");
+      toast.error(e?.message ?? "Scan failed");
     } finally {
       setScanLoading(false);
     }
@@ -130,13 +127,11 @@ export function Dashboard() {
   const handleImportFromUrl = async () => {
     const url = repoUrl.trim();
     if (!url) {
-      setScanError(
+      toast.error(
         "Please paste a GitHub repo URL (example: https://github.com/owner/repo).",
       );
       return;
     }
-
-    setScanError(null);
     setScanLoading(true);
 
     try {
@@ -147,7 +142,7 @@ export function Dashboard() {
       setRepoUrl("");
       setRepoRef("main");
     } catch (e: any) {
-      setScanError(e?.message ?? "Import from URL failed");
+      toast.error(e?.message ?? "Import from URL failed");
     } finally {
       setScanLoading(false);
     }
@@ -234,10 +229,6 @@ export function Dashboard() {
               <p className="text-sm text-muted-foreground mb-4 max-w-sm">
                 Supported formats: .zip (max 500MB)
               </p>
-
-              {scanError && (
-                <p className="text-sm text-destructive mb-4">{scanError}</p>
-              )}
 
               <div className="flex gap-3">
                 <Button
