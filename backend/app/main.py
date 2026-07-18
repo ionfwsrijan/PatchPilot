@@ -77,6 +77,11 @@ from .scanners.semgrep import run_semgrep
 from .security import verify_api_key
 from .utils.fs import ensure_dir, safe_job_dir, safe_rmtree, unzip_to_dir
 
+try:
+    import tomllib
+except ImportError:  # Python 3.10
+    import tomli as tomllib  # type: ignore[no-redef]
+
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
 
@@ -197,7 +202,8 @@ def _prioritize_findings(findings: List[Finding]) -> List[Finding]:
 def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
     """
     Lightweight parser to extract dependencies from common manifests.
-    Currently supports package.json (Node) and requirements.txt (Python).
+    Currently supports package.json (Node), requirements.txt and
+    pyproject.toml (Python — Poetry and PEP 621).
     Returns a list of (package_name, version) tuples.
     """
     deps = []
@@ -231,6 +237,46 @@ def _extract_dependencies(repo_dir: Path) -> List[tuple[str, str]]:
                     deps.append((name, version))
         except Exception as e:
             logger.warning("Failed to parse requirements.txt in %s: %s", repo_dir, e)
+
+    pyproject_path = repo_dir / "pyproject.toml"
+    if pyproject_path.exists():
+        try:
+            with pyproject_path.open("rb") as f:
+                data = tomllib.load(f)
+
+            # Projects using Poetry as a PEP 621 build backend can declare
+            # both sections; track names so each package is added only once.
+            pyproject_seen = set()
+
+            poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+            for name, spec in poetry_deps.items():
+                if name == "python":
+                    continue
+                if isinstance(spec, str):
+                    version = spec
+                elif isinstance(spec, dict):
+                    version = str(spec.get("version", "unknown"))
+                else:
+                    version = "unknown"
+                pyproject_seen.add(name.lower())
+                deps.append((name, version))
+
+            for req in data.get("project", {}).get("dependencies", []):
+                # Drop environment markers ("pkg>=1.0; python_version<'3.11'")
+                # and allow extras ("pkg[extra]>=1.0").
+                req = str(req).split(";")[0].strip()
+                match = re.match(
+                    r"^([a-zA-Z0-9._\-]+)(?:\[[^\]]*\])?\s*(?:[=<>~!]+\s*(.*))?$", req
+                )
+                if match:
+                    name = match.group(1)
+                    if name.lower() in pyproject_seen:
+                        continue
+                    pyproject_seen.add(name.lower())
+                    version = (match.group(2) or "unknown").strip()
+                    deps.append((name, version))
+        except Exception as e:
+            logger.warning("Failed to parse pyproject.toml in %s: %s", repo_dir, e)
 
     return deps
 
@@ -973,7 +1019,7 @@ async def verify(
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
 
-    result = verify_repo(repo_dir)
+    result = await run_in_threadpool(verify_repo, repo_dir)
 
     if baseline_job_id is not None:
         try:
@@ -984,8 +1030,13 @@ async def verify(
     baseline_job_id = baseline_job_id or job_id
     baseline_findings = await get_baseline_findings(baseline_job_id)
 
-    _, _, _, _, findings = _scan_repo_dir(
-        repo_dir, job_dir=job_dir, raw_dir_name="raw_verify"
+    _, _, _, _, findings = await run_in_threadpool(
+        functools.partial(
+            _scan_repo_dir,
+            repo_dir,
+            job_dir=job_dir,
+            raw_dir_name="raw_verify",
+        )
     )
 
     current_findings = {finding_key(f) for f in findings}
@@ -1009,8 +1060,10 @@ async def verify(
         "new_issues_introduced": new_issues_introduced,
         "baseline_job_id": baseline_job_id,
     }
-    (verify_dir / "verification-report.json").write_text(
-        json.dumps(verify_report, indent=2), encoding="utf-8"
+    await run_in_threadpool(
+        (verify_dir / "verification-report.json").write_text,
+        json.dumps(verify_report, indent=2),
+        encoding="utf-8",
     )
 
     try:
