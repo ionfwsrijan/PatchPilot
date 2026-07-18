@@ -174,10 +174,8 @@ export function Findings() {
           return;
         }
 
-        const response: any = await getJobFindings(jobId);
-        const actualFindings = Array.isArray(response)
-          ? response
-          : (response.findings || response.data || []);
+        const response = await getJobFindings(jobId);
+        const actualFindings = response.findings || [];
 
         const projectName = response.project_name || (storedScan?.job_id === jobId ? storedScan.project_name : "Unknown Project");
 

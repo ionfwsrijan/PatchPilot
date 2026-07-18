@@ -45,11 +45,11 @@ export type BackendFinding = {
   };
 
   reachability?: {
-  reachable?: boolean;
-  reason?: string;
-};
+    reachable?: boolean;
+    reason?: string;
+  };
 
-features?: Record<string, unknown>;
+  features?: Record<string, unknown>;
   confidence?: number;
   code?: string;
   suggested_fix?: string;
@@ -101,10 +101,18 @@ export async function scanRepoUrl(
 
   return (await res.json()) as ScanInitResponse;
 }
-export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
+export type JobFindingsResponse = {
+  job_id: string;
+  project_name?: string | null;
+  raw_finding_count: number;
+  finding_count: number;
+  findings: BackendFinding[];
+};
+
+export async function getJobFindings(jobId: string): Promise<JobFindingsResponse> {
   const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
   if (!res.ok) throw new Error(await res.text());
-  return (await res.json()) as BackendFinding[];
+  return (await res.json()) as JobFindingsResponse;
 }
 
 export async function labelFinding(

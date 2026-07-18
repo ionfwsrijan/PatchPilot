@@ -30,3 +30,17 @@ SQLite database (`patchpilot.db`) is auto-created in `backend/` on first server 
 | `scanner`     | TEXT    | `semgrep`, `osv`, or `gitleaks`                           |
 | `message`     | TEXT    | Description of the finding                                |
 | `created_at`  | TEXT    | Timestamp of finding creation                             |
+
+## API Reference
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `GET` | `/jobs` | List scan jobs (paginated) |
+| `GET` | `/jobs/{job_id}/findings` | Get findings for a specific job |
+| `DELETE` | `/jobs/{job_id}` | Delete a job workspace |
+| `POST` | `/scan` | Upload ZIP and scan |
+| `POST` | `/scan-url` | Import GitHub repo URL and scan |
+| `POST` | `/fix` | Generate proposed fixes |
+| `POST` | `/verify` | Verify fixes |
+| `POST` | `/evidence-pack` | Build and download evidence ZIP |

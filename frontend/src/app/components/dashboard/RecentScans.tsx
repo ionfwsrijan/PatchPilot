@@ -17,7 +17,11 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
   const navigate = useNavigate();
 
   const formatTimestamp = (timestamp: string) => {
-    const date = new Date(timestamp);
+    let formattedStr = timestamp;
+    if (timestamp && !timestamp.endsWith("Z") && !timestamp.includes("+")) {
+      formattedStr = timestamp.replace(" ", "T") + "Z";
+    }
+    const date = new Date(formattedStr);
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",

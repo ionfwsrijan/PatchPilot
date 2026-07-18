@@ -6,6 +6,7 @@ import joblib
 try:
     import torch
     from transformers import AutoModel, AutoTokenizer
+
     TORCH_AND_TRANSFORMERS_AVAILABLE = True
 except ImportError:
     torch = None

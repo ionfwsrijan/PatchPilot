@@ -27,6 +27,23 @@ function getClearedJobIds(): string[] {
   }
 }
 
+function mapBackendStatus(status: string): UiJobStatus {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "scanning":
+      return "running";
+    case "failed":
+    case "aborted":
+      return "failed";
+    case "pending":
+    case "queued":
+      return "pending";
+    default:
+      return "pending";
+  }
+}
+
 export function useRecentJobs() {
   const navigate = useNavigate();
   const [recentJobs, setRecentJobs] = useState<UiJob[]>([]);
@@ -40,7 +57,7 @@ export function useRecentJobs() {
         .map((j) => ({
           id: j.job_id,
           repoName: j.project_name,
-          status: j.status as UiJobStatus,
+          status: mapBackendStatus(j.status),
           timestamp: j.created_at,
           duration: "-",
           findingsCount: j.finding_count ?? 0,

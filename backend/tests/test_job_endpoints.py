@@ -276,4 +276,3 @@ class TestListJobs:
     def test_list_jobs_invalid_offset(self):
         res = client.get("/jobs?offset=-1")
         assert res.status_code == 422
-

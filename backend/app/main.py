@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import uuid
@@ -81,6 +82,11 @@ try:
     import tomllib
 except ImportError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
+
+# Prepend the virtual environment's executable directory to PATH to auto-detect scanners
+venv_bin = os.path.dirname(sys.executable)
+if venv_bin and venv_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = venv_bin + os.pathsep + os.environ.get("PATH", "")
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
