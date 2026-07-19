@@ -682,7 +682,10 @@ async def _run_single_scan_task(
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
-    project: UploadFile = File(...,description="ZIP archive containing the project source code to scan.",),
+    project: UploadFile = File(
+        ...,
+        description="ZIP archive containing the project source code to scan.",
+    ),
     policy: UploadFile | None = File(None),
     project_name: str = Form(
         "project",
