@@ -309,6 +309,88 @@ def test_extract_dependencies(tmp_path):
     assert ("pydantic", "1.10") in deps
 
 
+def test_extract_dependencies_pyproject_poetry(tmp_path):
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.10"\n'
+        'requests = "^2.28"\n'
+        'httpx = {version = "^0.27", extras = ["http2"]}\n'
+        'mylib = {git = "https://example.com/mylib.git"}\n',
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert ("requests", "^2.28") in deps
+    assert ("httpx", "^0.27") in deps
+    assert ("mylib", "unknown") in deps
+    assert all(name != "python" for name, _ in deps)
+
+
+def test_extract_dependencies_pyproject_pep621(tmp_path):
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\n"
+        'name = "demo"\n'
+        "dependencies = [\n"
+        '    "flask>=3.0",\n'
+        '    "click",\n'
+        '    "uvicorn[standard]>=0.30",\n'
+        "    \"tomli>=2.0; python_version < '3.11'\",\n"
+        "]\n",
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert ("flask", "3.0") in deps
+    assert ("click", "unknown") in deps
+    assert ("uvicorn", "0.30") in deps
+    assert ("tomli", "2.0") in deps
+
+
+def test_extract_dependencies_pyproject_dual_section_dedup(tmp_path):
+    """Poetry + PEP 621 in one pyproject.toml must not duplicate packages."""
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\n"
+        'name = "demo"\n'
+        'dependencies = ["requests>=2.28", "flask>=3.0"]\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.10"\n'
+        'requests = "^2.28"\n',
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    names = [name for name, _ in deps]
+    assert names.count("requests") == 1
+    # Poetry section is parsed first, so its version format wins.
+    assert ("requests", "^2.28") in deps
+    assert ("flask", "3.0") in deps
+
+
+def test_extract_dependencies_pyproject_malformed(tmp_path):
+    """A broken pyproject.toml must not crash extraction of other manifests."""
+    from app.main import _extract_dependencies
+
+    (tmp_path / "pyproject.toml").write_text("[not closed", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("fastapi==0.95.0", encoding="utf-8")
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert deps == [("fastapi", "0.95.0")]
+
+
 @pytest.mark.anyio
 @patch("app.main.httpx.AsyncClient.get")
 async def test_fetch_org_repos_timeout(mock_get):

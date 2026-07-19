@@ -70,20 +70,15 @@ function ChartContainer({
 }
 
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
-  const colorConfig = Object.entries(config).filter(
-    ([, config]) => config.theme || config.color,
+  const colorConfig = React.useMemo(
+    () => Object.entries(config).filter(([, c]) => c.theme || c.color),
+    [config],
   );
 
-  if (!colorConfig.length) {
-    return null;
-  }
-
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
+  const cssText = React.useMemo(() => {
+    if (!colorConfig.length) return "";
+    return Object.entries(THEMES)
+      .map(([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
@@ -94,12 +89,13 @@ ${colorConfig
   })
   .join("\n")}
 }
-`,
-          )
-          .join("\n"),
-      }}
-    />
-  );
+`)
+      .join("\n");
+  }, [id, colorConfig]);
+
+  if (!colorConfig.length) return null;
+
+  return <style>{cssText}</style>;
 };
 
 const ChartTooltip = RechartsPrimitive.Tooltip;
@@ -316,8 +312,8 @@ function getPayloadConfigFromPayload(
 
   const payloadPayload =
     "payload" in payload &&
-    typeof payload.payload === "object" &&
-    payload.payload !== null
+      typeof payload.payload === "object" &&
+      payload.payload !== null
       ? payload.payload
       : undefined;
 
