@@ -222,9 +222,11 @@ class TestStreamSingleScan:
 
 
 class TestDeleteJob:
+    @patch("app.main.get_job", new_callable=AsyncMock)
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
-    def test_delete_success(self, mock_rmtree, mock_safe_job_dir):
+    def test_delete_success(self, mock_rmtree, mock_safe_job_dir, mock_get_job):
+        mock_get_job.return_value = {"job_id": JOB_ID}
         from unittest.mock import MagicMock
 
         mock_job_dir = MagicMock()
@@ -243,16 +245,20 @@ class TestDeleteJob:
         assert res.json() == {"deleted": True}
 
         # Verify db logic called
-        assert db.execute.call_count == 4  # BEGIN, DELETE x3
+        assert db.execute.call_count == 3  # DELETE x3
         assert db.commit.called
         assert not db.rollback.called
 
         # Verify rmtree called because job_dir exists and db commit didn't fail
         mock_rmtree.assert_called_once_with(mock_job_dir)
 
+    @patch("app.main.get_job", new_callable=AsyncMock)
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
-    def test_delete_missing_directory(self, mock_rmtree, mock_safe_job_dir):
+    def test_delete_missing_directory(
+        self, mock_rmtree, mock_safe_job_dir, mock_get_job
+    ):
+        mock_get_job.return_value = {"job_id": JOB_ID}
         from unittest.mock import MagicMock
 
         mock_job_dir = MagicMock()
@@ -275,9 +281,11 @@ class TestDeleteJob:
         # Verify rmtree NOT called
         mock_rmtree.assert_not_called()
 
+    @patch("app.main.get_job", new_callable=AsyncMock)
     @patch("app.main.safe_job_dir")
     @patch("app.main.safe_rmtree")
-    def test_delete_db_failure(self, mock_rmtree, mock_safe_job_dir):
+    def test_delete_db_failure(self, mock_rmtree, mock_safe_job_dir, mock_get_job):
+        mock_get_job.return_value = {"job_id": JOB_ID}
         from unittest.mock import MagicMock
 
         mock_job_dir = MagicMock()
@@ -298,4 +306,27 @@ class TestDeleteJob:
         assert db.rollback.called
 
         # Verify rmtree NOT called since db failed
+        mock_rmtree.assert_not_called()
+
+    @patch("app.main.get_job", new_callable=AsyncMock)
+    @patch("app.main.safe_job_dir")
+    @patch("app.main.safe_rmtree")
+    def test_delete_missing_job_returns_404(
+        self, mock_rmtree, mock_safe_job_dir, mock_get_job
+    ):
+        mock_get_job.return_value = None  # Job not found in DB
+
+        db = db_mock(True)
+        db.execute = AsyncMock()
+
+        with patch("app.main.get_db", AsyncMock(return_value=db)):
+            res = client.delete(f"/jobs/{JOB_ID}")
+
+        assert res.status_code == 404
+        assert "No job found" in res.json()["detail"]
+
+        # Verify delete_job was not called (execute not called for DELETE)
+        assert db.execute.call_count == 0
+
+        # Verify rmtree NOT called
         mock_rmtree.assert_not_called()
