@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
 
 
 class Location(BaseModel):
@@ -15,6 +16,12 @@ class Reachability(BaseModel):
     evidence: Optional[str] = None
 
 
+class FindingStatusUpdate(BaseModel):
+    status: str = Field(
+        ..., description="The new status: 'open', 'accepted', or 'ignored'"
+    )
+
+
 class Finding(BaseModel):
     id: str
     category: str
@@ -25,6 +32,7 @@ class Finding(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     reachability: Optional[Reachability] = None
     features: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    ml_score: Optional[float] = None
 
 
 class ScanResponse(BaseModel):
@@ -42,6 +50,7 @@ class Fix(BaseModel):
     files_changed: List[str] = Field(default_factory=list)
     diff: Optional[str] = None
     notes: List[str] = Field(default_factory=list)
+    fix_confidence: Optional[float] = None
 
 
 class FixRequest(BaseModel):
@@ -57,3 +66,19 @@ class FixResponse(BaseModel):
 class VerifyResponse(BaseModel):
     ok: bool
     checks: Dict[str, Any]
+
+
+class OrgScanRequest(BaseModel):
+    org_url: str
+
+
+class RepoStatus(BaseModel):
+    job_id: str
+    project_name: str
+    status: str
+
+
+class OrgJobStatusResponse(BaseModel):
+    org_job_id: str
+    status: str
+    repos: List[RepoStatus]

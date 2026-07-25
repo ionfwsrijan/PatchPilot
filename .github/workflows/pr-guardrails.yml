@@ -1,0 +1,332 @@
+name: PR Guardrails
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  triage-and-label:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Validate PR Template & Auto-Label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prBody = context.payload.pull_request.body || "";
+            const prNumber = context.issue.number;
+            const repoInfo = context.repo;
+
+            const labelsToAdd = new Set();
+            
+            try {
+              labelsToAdd.add('SSoC26');
+            } catch (e) {}
+            
+            const isChecked = (text) => prBody.includes(`- [x] ${text}`) || prBody.includes(`- [X] ${text}`);
+            
+            if (isChecked("Bug fix")) labelsToAdd.add('bug');
+            if (isChecked("New feature")) labelsToAdd.add('feature');
+            if (isChecked("Refactor")) labelsToAdd.add('refactor');
+            if (isChecked("Documentation")) labelsToAdd.add('documentation');
+            if (isChecked("Tests only")) labelsToAdd.add('test');
+            
+            if (isChecked("ML model") || isChecked("Tier 1") || isChecked("Tier 2") || isChecked("Tier 3")) labelsToAdd.add('ml');
+            
+            if (isChecked("Backend")) labelsToAdd.add('backend');
+            if (isChecked("Frontend")) labelsToAdd.add('frontend');
+            if (isChecked("Both")) {
+              labelsToAdd.add('backend');
+              labelsToAdd.add('frontend');
+            }
+            
+            const backendSplit = prBody.split("### Backend");
+            if (backendSplit.length > 1) {
+              const backendText = backendSplit[1].split("###")[0] || "";
+              const cleanBackend = backendText.replace(/<\!--[\s\S]*?-->/g, "").trim();
+              if (cleanBackend.length > 0 && cleanBackend !== '-') labelsToAdd.add('backend');
+            }
+
+            const frontendSplit = prBody.split("### Frontend");
+            if (frontendSplit.length > 1) {
+              const frontendText = frontendSplit[1].split("###")[0] || "";
+              const cleanFrontend = frontendText.replace(/<\!--[\s\S]*?-->/g, "").trim();
+              if (cleanFrontend.length > 0 && cleanFrontend !== '-') labelsToAdd.add('frontend');
+            }
+
+            if (labelsToAdd.size > 0) {
+              const finalLabels = Array.from(labelsToAdd);
+              console.log("Applying auto-labels: ", finalLabels);
+              try {
+                await github.rest.issues.addLabels({
+                  ...repoInfo,
+                  issue_number: prNumber,
+                  labels: finalLabels
+                });
+              } catch (error) {}
+            }
+
+            const hasLinkedIssue = prBody.includes("Closes #");
+
+            const requiredPhrases = [
+              "## Linked issue",
+              "## What this PR does",
+              "## Type of change",
+              "Bug fix",
+              "New feature",
+              "ML model",
+              "Refactor",
+              "Documentation",
+              "Tests only",
+              "## ML tier",
+              "Tier 1",
+              "Tier 2",
+              "Tier 3",
+              "Not ML-related",
+              "## Stack affected",
+              "Backend",
+              "Frontend",
+              "Both",
+              "## Changes",
+              "## Testing",
+              "**How did you test this?**",
+              "**Checklist**",
+              "Tested locally end-to-end",
+              "New ML model falls back",
+              "No new `console.error`",
+              "Added or updated tests",
+              "`requirements.txt`",
+              "New model files",
+              "## Anything reviewers should focus on"
+            ];
+            
+            const hasAllMandatoryText = requiredPhrases.every(phrase => prBody.includes(phrase));
+
+            let hasDescContent = false;
+            const descSplit = prBody.split("## What this PR does");
+            if (descSplit.length > 1) {
+              const descSection = descSplit[1].split("## Type of change")[0] || "";
+              const cleanDesc = descSection.replace(/<\!--[\s\S]*?-->/g, "").trim();
+              if (cleanDesc.length > 5) hasDescContent = true;
+            }
+
+            let hasTestContent = false;
+            const testSplit = prBody.split("**How did you test this?**");
+            if (testSplit.length > 1) {
+              const testSection = testSplit[1].split("**Checklist**")[0] || "";
+              const cleanTest = testSection.replace(/<\!--[\s\S]*?-->/g, "").trim();
+              if (cleanTest.length > 5) hasTestContent = true;
+            }
+
+            const isValid = hasLinkedIssue && hasAllMandatoryText && hasDescContent && hasTestContent;
+
+            if (!isValid) {
+              console.log("Validation failed. Adding needs-work and failing action.");
+              await github.rest.issues.addLabels({
+                ...repoInfo,
+                issue_number: prNumber,
+                labels: ['needs-work']
+              });
+              
+              const comments = await github.rest.issues.listComments({
+                ...repoInfo,
+                issue_number: prNumber
+              });
+              const alreadyCommented = comments.data.some(c => c.body.includes("⚠️ **Automated Check:**"));
+              
+              if (!alreadyCommented) {
+                const rawTemplate = [
+                  "> **Before opening:** make sure there is an issue tracking this work, and link it below. PRs without a linked issue may be closed without review.",
+                  "",
+                  "## Linked issue",
+                  "",
+                  "Closes #",
+                  "",
+                  "## What this PR does",
+                  "",
+                  "",
+                  "",
+                  "## Type of change",
+                  "",
+                  "- [ ] Bug fix",
+                  "- [ ] New feature",
+                  "- [ ] ML model / training pipeline",
+                  "- [ ] Refactor (no behaviour change)",
+                  "- [ ] Documentation",
+                  "- [ ] Tests only",
+                  "",
+                  "## ML tier (if applicable)",
+                  "",
+                  "- [ ] Tier 1 — Triage",
+                  "- [ ] Tier 2 — Predictive",
+                  "- [ ] Tier 3 — Autonomous",
+                  "- [ ] Not ML-related",
+                  "",
+                  "## Stack affected",
+                  "",
+                  "- [ ] Backend",
+                  "- [ ] Frontend",
+                  "- [ ] Both",
+                  "",
+                  "---",
+                  "",
+                  "## Changes",
+                  "",
+                  "### Backend",
+                  "",
+                  "",
+                  "",
+                  "-",
+                  "",
+                  "### Frontend",
+                  "",
+                  "",
+                  "",
+                  "-",
+                  "",
+                  "### New dependencies",
+                  "",
+                  "",
+                  "",
+                  "-",
+                  "",
+                  "### Database / schema changes",
+                  "",
+                  "",
+                  "",
+                  "-",
+                  "",
+                  "---",
+                  "",
+                  "## Testing",
+                  "",
+                  "**How did you test this?**",
+                  "",
+                  "",
+                  "",
+                  "**Checklist**",
+                  "",
+                  "- [ ] Tested locally end-to-end (upload ZIP or GitHub URL → scan → findings returned correctly)",
+                  "- [ ] New ML model falls back gracefully when model file is absent",
+                  "- [ ] No new `console.error` or unhandled Python exceptions introduced",
+                  "- [ ] Added or updated tests where applicable",
+                  "- [ ] `requirements.txt` / `package.json` updated if new dependencies added",
+                  "- [ ] New model files (`.pkl`, `.pt`, etc.) are gitignored, not committed",
+                  "",
+                  "---",
+                  "",
+                  "## Anything reviewers should focus on",
+                  "",
+                  "",
+                  "",
+                  "## Screenshots (if UI changed)",
+                  "",
+                  ""
+                ].join("\n");
+                
+                const commentBody = `⚠️ **Automated Check:** This PR does not strictly follow the required template. Please ensure you have not deleted any checkboxes or mandatory headings, and that you have written explanations under \`What this PR does\` and \`How did you test this?\`.\n\n### Correct PR Template\nPlease copy and paste the raw template below into your PR description and fill it out:\n\n\`\`\`markdown\n${rawTemplate}\n\`\`\``;
+
+                await github.rest.issues.createComment({
+                  ...repoInfo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              }
+              
+              core.setFailed("🚨 PR Template Validation Failed: Missing required sections, explanations, or checkboxes.");
+              
+            } else {
+              // ── Validation passed ──────────────────────────────────────────
+
+              // 1. Remove needs-work label if present
+              try {
+                await github.rest.issues.removeLabel({
+                  ...repoInfo,
+                  issue_number: prNumber,
+                  name: 'needs-work'
+                });
+                console.log("Removed 'needs-work' label.");
+              } catch (error) {}
+
+              // 2. Delete the old warning comment if it exists
+              try {
+                const comments = await github.rest.issues.listComments({
+                  ...repoInfo,
+                  issue_number: prNumber
+                });
+                const warningComment = comments.data.find(c => c.body.includes("⚠️ **Automated Check:**"));
+                
+                if (warningComment) {
+                  await github.rest.issues.deleteComment({
+                    ...repoInfo,
+                    comment_id: warningComment.id
+                  });
+                  console.log("Deleted warning comment.");
+                }
+
+                // 3. Request review from maintainer — only once per PR
+                //    Re-requesting on every commit push would spam the reviewer,
+                //    so check if a review request for arpit2006 already exists.
+                const reviewRequests = await github.rest.pulls.listRequestedReviewers({
+                  ...repoInfo,
+                  pull_number: prNumber
+                });
+                const alreadyRequested = reviewRequests.data.users.some(
+                  u => u.login === 'arpit2006'
+                );
+
+                if (!alreadyRequested) {
+                  await github.rest.pulls.requestReviewers({
+                    ...repoInfo,
+                    pull_number: prNumber,
+                    reviewers: ['arpit2006']
+                  });
+                  console.log("Review requested from @arpit2006.");
+                }
+
+                // 4. Ping maintainer in comment — only once per PR
+                const alreadyPinged = comments.data.some(c =>
+                  c.body.includes("✅ **PR template check passed**")
+                );
+
+                if (!alreadyPinged) {
+                  await github.rest.issues.createComment({
+                    ...repoInfo,
+                    issue_number: prNumber,
+                    body: `✅ **PR template check passed!**\n\n@arpit2006 this PR is ready for your review. 🚀`
+                  });
+                  console.log("Pinged maintainer @arpit2006 for review.");
+                }
+
+              } catch (error) {
+                console.log("Post-validation step error: ", error.message);
+              }
+            }
+
+  security-scan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Basic Security Scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

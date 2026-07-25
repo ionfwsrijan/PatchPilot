@@ -69,6 +69,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -r requirements-ml.txt # Required for ML features
 uvicorn app.main:app --reload --port 8000
 ```
 

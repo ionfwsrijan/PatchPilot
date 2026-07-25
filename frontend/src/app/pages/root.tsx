@@ -1,11 +1,11 @@
 import { Outlet } from "react-router-dom";
-import { Header } from "../components/header";
-import { MobileNav } from "../components/mobile-nav";
 import { useEffect, useState } from "react";
 import { getHealth, type HealthResponse } from "../lib/api";
+import { AppSidebar, AppTopBar } from "../components/app-sidebar";
 
 export function Root() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   useEffect(() => {
     getHealth()
@@ -13,41 +13,39 @@ export function Root() {
       .catch(console.error);
   }, []);
   const unavailableScanners =
-  health?.scanners
-    ? Object.entries(health.scanners)
-        .filter(([_, available]) => !available)
-        .map(([name]) => name)
-    : [];
-
-  
+    health?.scanners
+      ? Object.entries(health.scanners)
+          .filter(([, available]) => !available)
+          .map(([name]) => name)
+      : [];
 
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      <AppSidebar
+        mobileOpen={mobileSidebarOpen}
+        onMobileOpenChange={setMobileSidebarOpen}
+      />
 
-     {health?.status === "degraded" && (
-  <div className="bg-yellow-100 border-b border-yellow-300 px-4 py-3 text-yellow-900">
-    <p className="font-semibold">
-      ⚠ System is running in degraded mode.
-    </p>
+      <div className="min-h-screen md:pl-20">
+        <AppTopBar onMenuClick={() => setMobileSidebarOpen(true)} />
 
-    <p>
-      One or more scanners are unavailable. Scan results may be incomplete.
-    </p>
+        {health?.status === "degraded" && (
+          <div className="border-b border-yellow-300 bg-yellow-100 px-4 py-3 text-yellow-900">
+            <p className="font-semibold">System is running in degraded mode.</p>
+            <p>
+              One or more scanners are unavailable. Scan results may be
+              incomplete.
+            </p>
+            {unavailableScanners.length > 0 && (
+              <p>Unavailable scanners: {unavailableScanners.join(", ")}</p>
+            )}
+          </div>
+        )}
 
-    {unavailableScanners.length > 0 && (
-      <p>
-        Unavailable scanners: {unavailableScanners.join(", ")}
-      </p>
-    )}
-  </div>
-)}
-
-      <main className="min-h-[calc(100vh-4rem)]">
-        <Outlet />
-      </main>
-
-      <MobileNav />
+        <main className="min-h-[calc(100vh-4rem)]">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

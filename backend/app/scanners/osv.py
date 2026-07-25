@@ -5,13 +5,25 @@ from pathlib import Path
 from typing import List
 
 from ..models import Finding, Reachability
-from ..utils.fs import check_reachability
+from ..utils.categories import normalize_category
 from ..utils.exec import run_cmd
-
+from ..utils.fs import check_reachability
 from ..utils.ml_features import extract_features
 
 
-def run_osv_scanner(repo_dir: Path) -> List[Finding]:
+def map_cvss_to_severity(score):
+    if score >= 9:
+        return "CRITICAL"
+    elif score >= 7:
+        return "HIGH"
+    elif score >= 4:
+        return "MEDIUM"
+    elif score > 0:
+        return "LOW"
+    return "INFO"
+
+
+def run_osv_scanner(repo_dir: Path, raw_out: Path = None) -> List[Finding]:
     """
     Runs osv-scanner in repo_dir and returns ONLY real vulnerability findings.
 
@@ -31,6 +43,11 @@ def run_osv_scanner(repo_dir: Path) -> List[Finding]:
     print("OSV returncode:", r.get("returncode"))
     print("OSV stdout head:", (r.get("stdout") or "")[:200])
     print("OSV stderr head:", (r.get("stderr") or "")[:500])
+
+    # Persist raw output before any parsing so the evidence pack can read it
+    if raw_out is not None:
+        raw_out.parent.mkdir(parents=True, exist_ok=True)
+        raw_out.write_text(r.get("stdout", ""), encoding="utf-8")
 
     stdout = r.get("stdout") or ""
     stderr = r.get("stderr") or ""
@@ -64,6 +81,24 @@ def run_osv_scanner(repo_dir: Path) -> List[Finding]:
                 finding_id = f"osv:{vuln_id}:{pkg_name or 'pkg'}"
                 severity = "HIGH"
 
+                try:
+                    severity_data = v.get("severity", [])
+
+                    if severity_data:
+                        score_text = severity_data[0].get("score", "")
+
+                        import re
+
+                        match = re.search(
+                            r"CVSS:3\.[01]/.*?/([0-9]+\.[0-9]+)$", score_text
+                        )
+
+                        if match:
+                            cvss_score = float(match.group(1))
+                            severity = map_cvss_to_severity(cvss_score)
+
+                except Exception:
+                    pass
                 raw_data_for_extractor = {
                     "id": finding_id,
                     "severity": severity,
@@ -78,7 +113,7 @@ def run_osv_scanner(repo_dir: Path) -> List[Finding]:
                 out.append(
                     Finding(
                         id=finding_id,
-                        category="dependency",
+                        category=normalize_category("dependency"),
                         severity=severity,
                         title=f"Dependency vulnerability {vuln_id}",
                         description=(v.get("summary") or v.get("details") or "")[:1000],
