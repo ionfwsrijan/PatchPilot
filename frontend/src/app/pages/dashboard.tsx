@@ -195,7 +195,11 @@ export function Dashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <label htmlFor="zip-upload" className="sr-only">
+            Upload ZIP Archive
+          </label>
           <input
+            id="zip-upload"
             ref={fileInputRef}
             type="file"
             accept=".zip"
@@ -237,7 +241,6 @@ export function Dashboard() {
                 >
                   {scanLoading ? "Scanning..." : "Browse Files"}
                 </Button>
-
                 <Button
                   variant="outline"
                   disabled={scanLoading}
@@ -283,6 +286,7 @@ export function Dashboard() {
                     onChange={(e) => setRepoRef(e.target.value)}
                     disabled={scanLoading}
                   />
+
                 </div>
 
                 <div className="mt-4 flex justify-end gap-2">
