@@ -1,7 +1,12 @@
 from pathlib import Path
 
-import joblib
-import pandas as pd
+try:
+    import joblib
+    import pandas as pd
+
+    RANKER_DEPENDENCIES_AVAILABLE = True
+except ImportError:
+    RANKER_DEPENDENCIES_AVAILABLE = False
 
 from app.utils.ml_features import extract_features
 
@@ -9,6 +14,10 @@ MODEL_PATH = Path(__file__).parent / "models" / "ranker.pkl"
 
 
 def load_ranker():
+    if not RANKER_DEPENDENCIES_AVAILABLE:
+        print("Ranker dependencies missing, using default sort")
+        return None
+
     if not MODEL_PATH.exists():
         print("Ranker not found, using default sort")
         return None
@@ -25,7 +34,7 @@ def load_ranker():
 
 
 def scoring_function(findings, model):
-    if model is None:
+    if not RANKER_DEPENDENCIES_AVAILABLE or model is None:
         return findings
 
     ml_features = []

@@ -51,6 +51,7 @@ from .db import (
     upsert_contributor_stat,
 )
 from .ml.deduplicator import SENTENCE_TRANSFORMERS_AVAILABLE, deduplicate
+from .ml.fix_predictor import predict_confidence
 from .ml.fp_predictor import predictor
 from .ml.ranker import load_ranker, scoring_function
 from .models import (
@@ -83,7 +84,7 @@ except ImportError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
-RANKER = load_ranker()
+RANKER = None
 
 try:
     MAX_UPLOAD_MB = int(_MAX_UPLOAD_MB_RAW) if _MAX_UPLOAD_MB_RAW else 100
@@ -131,6 +132,12 @@ ensure_dir(WORK_ROOT)
 @app.on_event("startup")
 async def startup():
     await init_db()
+    # Load optional ML ranker in a threadpool to avoid import-time IO and startup crashes
+    global RANKER
+    try:
+        RANKER = await run_in_threadpool(load_ranker)
+    except Exception:
+        RANKER = None
     # Start background cleanup for finished ACTIVE_SCANS entries
     asyncio.create_task(_cleanup_active_scans_loop())
 
@@ -929,7 +936,7 @@ async def _record_fixes_to_db(job_id: str, fixes: List[Fix]):
         500: {"description": "Internal server error."},
     },
 )
-def fix(req: FixRequest, background_tasks: BackgroundTasks):
+async def fix(req: FixRequest, background_tasks: BackgroundTasks):
     """
     Generate remediation suggestions for selected findings.
 
@@ -948,7 +955,8 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
 
     repo_dir = _maybe_use_single_top_folder(repo_dir)
     fixes = propose_fixes(repo_dir, req.finding_ids)
-
+    # Predict and assign confidence, then sort (run in threadpool)
+    fixes = await run_in_threadpool(predict_confidence, fixes)
     background_tasks.add_task(_record_fixes_to_db, req.job_id, fixes)
 
     return FixResponse(job_id=req.job_id, fixes=fixes)
