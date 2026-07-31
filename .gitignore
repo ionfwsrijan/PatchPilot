@@ -83,4 +83,6 @@ Thumbs.db
 logs/
 
 # Machine Learning Models
+*.pkl
 backend/app/ml/*.pkl
+backend/app/ml/models/*.pkl
