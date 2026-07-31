@@ -47,7 +47,7 @@ import { FilterChips } from "../components/filter-chips";
 import type { Finding } from "../data/sample-data";
 import { loadLastScan } from "../lib/scan-store";
 import { getJobFindings, updateFindingStatus, labelFinding } from "../lib/api";
-
+import { downloadFindingsAsCsv } from "../lib/csv-export";
 type UiFinding = Finding & { false_positive?: boolean | null, version?: number };
 import { mapBackendFindingToUi } from "../lib/mappers";
 import { cn } from "../components/ui/utils";
@@ -62,7 +62,7 @@ function ExportReportButton({ scanId }: { scanId: string }) {
 
     try {
       const { blob, filename } = await downloadAuditReport(scanId);
-      
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -159,10 +159,10 @@ export function Findings() {
     setScan(storedScan);
     getJobFindings(storedScan.job_id)
       .then((response: any) => {
-        const actualFindings = Array.isArray(response) 
-          ? response 
+        const actualFindings = Array.isArray(response)
+          ? response
           : (response.findings || response.data || []);
-          
+
         setFindings(actualFindings.map((bf: any) => ({
           ...mapBackendFindingToUi(bf),
           false_positive: bf.false_positive === 1 || bf.false_positive === true ? true : (bf.false_positive === 0 || bf.false_positive === false ? false : null)
@@ -176,7 +176,7 @@ export function Findings() {
   const [detailFinding, setDetailFinding] = useState<UiFinding | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [sortBy, setSortBy] = useState<"severity" | "ml_score">("severity");
-  
+
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
   const abortControllers = useRef<Record<string, AbortController>>({});
@@ -184,13 +184,13 @@ export function Findings() {
 
   const handleLabelFalsePositive = async (findingId: string, isFalsePositive: boolean, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    
+
     if (abortControllers.current[findingId]) {
       abortControllers.current[findingId].abort();
     }
     const controller = new AbortController();
     abortControllers.current[findingId] = controller;
-    
+
     const previousFinding = findings.find(f => f.id === findingId);
     const previousValue = previousFinding?.false_positive;
     const currentVersion = previousFinding?.version || 1;
@@ -200,7 +200,7 @@ export function Findings() {
     if (detailFinding && detailFinding.id === findingId) {
       setDetailFinding((prev) => prev ? { ...prev, false_positive: isFalsePositive } : null);
     }
-    
+
     try {
       await labelFinding(findingId, isFalsePositive, currentVersion, controller.signal);
       setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, version: currentVersion + 1 } : f));
@@ -209,13 +209,13 @@ export function Findings() {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
-      
+
       console.error("Failed to label finding", err);
       setFindings((prev) => prev.map((f) => f.id === findingId ? { ...f, false_positive: previousValue } : f));
       if (detailFinding && detailFinding.id === findingId) {
         setDetailFinding((prev) => prev ? { ...prev, false_positive: previousValue } : null);
       }
-      
+
       if (err.message?.includes('409') || err.status === 409) {
         alert("This finding has been modified by another user. Your changes were not saved.");
       } else {
@@ -230,7 +230,7 @@ export function Findings() {
     setIsUpdatingStatus(true);
     try {
       await updateFindingStatus(findingId, newStatus);
-      setFindings((prev) => 
+      setFindings((prev) =>
         prev.map((f) => f.id === findingId ? { ...f, status: newStatus } : f)
       );
       if (detailFinding && detailFinding.id === findingId) {
@@ -326,11 +326,11 @@ export function Findings() {
 
       const matchesSeverity =
         activeSeverities.size === 0 || activeSeverities.has(f.severity);
-        
-      const matchesStatus = 
+
+      const matchesStatus =
         selectedStatuses.size === 0 || selectedStatuses.has(f.status);
-        
-      const matchesTool = 
+
+      const matchesTool =
         selectedTools.size === 0 || selectedTools.has(f.tool);
 
       return matchesQuery && matchesSeverity && matchesStatus && matchesTool;
@@ -410,7 +410,16 @@ export function Findings() {
             {findings.length} vulnerabilities detected in {scan.project_name}
           </p>
         </div>
-        <ExportReportButton scanId={scan.job_id} />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => downloadFindingsAsCsv(filteredFindings, `${scan.project_name}-findings.csv`)}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export CSV
+          </Button>
+          <ExportReportButton scanId={scan.job_id} />
+        </div>
       </div>
 
       <Card className="mb-6">
@@ -481,9 +490,16 @@ export function Findings() {
                 >
                   <Button size="sm">Propose Fixes</Button>
                 </Link>
-                <Button variant="outline" size="sm" disabled>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const selected = findings.filter((f) => selectedFindings.has(f.id));
+                    downloadFindingsAsCsv(selected, `${scan.project_name}-selected-findings.csv`);
+                  }}
+                >
                   <Download className="h-4 w-4 mr-2" />
-                  Export
+                  Export CSV
                 </Button>
                 <Button variant="outline" size="sm" disabled>
                   <Plus className="h-4 w-4 mr-2" />
@@ -635,7 +651,7 @@ export function Findings() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="flex items-center justify-end mt-3 pt-3 border-t border-border/50">
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   <span className="text-xs text-muted-foreground mr-2" title="Mark as True Positive or False Positive">Accurate? ⓘ</span>
@@ -659,18 +675,18 @@ export function Findings() {
               Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredFindings.length)} of {filteredFindings.length} findings
             </span>
             <div className="flex items-center gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="h-4 w-4 mr-1" /> Prev
               </Button>
               <span className="text-sm font-medium px-2">Page {currentPage} of {Math.ceil(filteredFindings.length / itemsPerPage)}</span>
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredFindings.length / itemsPerPage), p + 1))}
                 disabled={currentPage === Math.ceil(filteredFindings.length / itemsPerPage)}
               >
@@ -681,7 +697,7 @@ export function Findings() {
         </Card>
       )}
 
-    <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
+      <Sheet open={!!detailFinding} onOpenChange={() => setDetailFinding(null)}>
         <SheetContent className="w-full sm:max-w-2xl overflow-y-auto flex flex-col p-6 sm:p-8">
           {detailFinding && (
             <>
@@ -808,7 +824,7 @@ export function Findings() {
                 </Tabs>
               </div>
 
-            {/* ML Labeling Section */}
+              {/* ML Labeling Section */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-6 mt-6 border-t border-border/50 shrink-0">
                 <div className="flex flex-col">
                   <span className="text-sm font-semibold">Label for ML Training</span>
@@ -826,11 +842,11 @@ export function Findings() {
                 </div>
               </div>
 
-            {/* Status Buttons - Dynamic and clickable */}
+              {/* Status Buttons - Dynamic and clickable */}
               <div className="flex gap-3 pt-4 shrink-0">
                 {detailFinding.status === 'accepted' ? (
-                   <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 border-status-success text-status-success bg-status-success/10 hover:bg-status-success/20 hover:text-status-success"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'open')}
                     disabled={isUpdatingStatus}
@@ -839,8 +855,8 @@ export function Findings() {
                     Accepted (Click to Re-open)
                   </Button>
                 ) : (
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 hover:bg-status-success/10 hover:text-status-success hover:border-status-success/50 transition-colors"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'accepted')}
                     disabled={isUpdatingStatus}
@@ -851,8 +867,8 @@ export function Findings() {
                 )}
 
                 {detailFinding.status === 'ignored' ? (
-                   <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 border-muted-foreground text-muted-foreground bg-muted hover:bg-muted/80"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'open')}
                     disabled={isUpdatingStatus}
@@ -861,8 +877,8 @@ export function Findings() {
                     Ignored (Click to Re-open)
                   </Button>
                 ) : (
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="flex-1 hover:bg-muted/50 transition-colors"
                     onClick={() => handleStatusUpdate(detailFinding.id, 'ignored')}
                     disabled={isUpdatingStatus}
@@ -874,7 +890,7 @@ export function Findings() {
               </div>
             </>
           )}
-    </SheetContent>
+        </SheetContent>
       </Sheet>
 
       <Sheet open={isFilterSheetOpen} onOpenChange={setIsFilterSheetOpen}>
@@ -883,7 +899,7 @@ export function Findings() {
             <SheetTitle>Advanced Filters</SheetTitle>
             <SheetDescription>Filter findings by status and tool</SheetDescription>
           </SheetHeader>
-          
+
           <div className="py-6 space-y-8">
             <div className="space-y-4">
               <h3 className="text-sm font-semibold tracking-tight">Status</h3>
@@ -932,8 +948,8 @@ export function Findings() {
             </div>
 
             <div className="pt-4 border-t border-border/50">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="w-full"
                 onClick={() => {
                   setSelectedStatuses(new Set());
