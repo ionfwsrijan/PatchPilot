@@ -1,16 +1,91 @@
+import { useState, useEffect } from "react";
 import { Loader2, Layers, CheckCircle, AlertTriangle } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
+import { getOrgJobStatus, abortOrganizationScan, API_BASE } from "../../lib/api";
+import { useNavigate } from "react-router-dom";
 
 interface ActiveOrgScanModalProps {
-  statusData: any;
+  orgJobId: string | null;
   expectedRepoCount: number;
-  isAborting: boolean;
-  onAbort: (mode: "pending" | "force") => void;
   onClose: () => void;
+  onCancel: () => void;
 }
 
-export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, onAbort, onClose }: ActiveOrgScanModalProps) {
+export function ActiveOrgScanModal({ orgJobId, expectedRepoCount, onClose, onCancel }: ActiveOrgScanModalProps) {
+  const navigate = useNavigate();
+  const [statusData, setStatusData] = useState<any>(null);
+  const [isAborting, setIsAborting] = useState(false);
+  const [sseConnection, setSseConnection] = useState<EventSource | null>(null);
+
+  useEffect(() => {
+    if (!orgJobId) {
+      setStatusData(null);
+      return;
+    }
+
+    getOrgJobStatus(orgJobId).then(setStatusData).catch(() => {});
+
+    const sse = new EventSource(`${API_BASE}/api/scans/org/${orgJobId}/stream`);
+    setSseConnection(sse);
+
+    sse.onmessage = (event) => {
+      const parsed = JSON.parse(event.data);
+      if (parsed.error) {
+        sse.close();
+        return;
+      }
+      
+      setStatusData(parsed);
+      const isFullyFinished = 
+        ["completed", "failed"].includes(parsed.status) || 
+        (parsed.status === "aborted" && !parsed.repos.some((r: any) => r.status === "scanning" || r.status === "pending"));
+
+      if (isFullyFinished) {
+        sse.close();
+      }
+    };
+
+    sse.onerror = () => {
+      // Optional SSE error handling
+    };
+
+    return () => {
+      sse.close();
+    };
+  }, [orgJobId]);
+
+  const handleAbortScan = async (mode: "pending" | "force") => {
+    if (!orgJobId) return;
+    
+    if (mode === "force") {
+      if (sseConnection) {
+        sseConnection.close();
+      }
+      onCancel();
+    } else {
+      setIsAborting(true);
+    }
+    
+    try {
+      await abortOrganizationScan(orgJobId, mode);
+    } catch (err) {
+      console.error("Failed to abort scan", err);
+    } finally {
+      if (mode !== "force") setIsAborting(false);
+    }
+  };
+
+  const handleClose = () => {
+    if (sseConnection) {
+      sseConnection.close();
+    }
+    onClose();
+    if (orgJobId) {
+      navigate(`/org-findings/${orgJobId}`);
+    }
+  };
+
   if (!statusData) return null;
 
   return (
@@ -75,7 +150,7 @@ export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, 
             <>
               <Button 
                 variant="outline" 
-                onClick={() => onAbort("pending")}
+                onClick={() => handleAbortScan("pending")}
                 disabled={isAborting}
                 className="transition-all cursor-pointer hover:bg-muted hover:shadow-sm"
               >
@@ -85,7 +160,7 @@ export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, 
               
               <Button 
                 variant="destructive" 
-                onClick={() => onAbort("force")}
+                onClick={() => handleAbortScan("force")}
                 disabled={isAborting}
                 className="transition-all cursor-pointer hover:bg-red-600 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 active:scale-95"
               >
@@ -96,7 +171,7 @@ export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, 
           )}
 
           {["completed", "failed", "aborted"].includes(statusData.status) && (
-            <Button size="lg" className="cursor-pointer" onClick={onClose}>
+            <Button size="lg" className="cursor-pointer" onClick={handleClose}>
               View Collected Analytics
             </Button>
           )}
