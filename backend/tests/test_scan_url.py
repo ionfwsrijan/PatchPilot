@@ -1,9 +1,56 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "main",
+        "feature/login",
+        "release-1.0",
+    ],
+)
+def test_scan_url_valid_refs(ref):
+    res = client.post(
+        "/scan-url",
+        data={
+            "repo_url": "not-a-url",
+            "ref": ref,
+            "project_name": "test_project",
+        },
+    )
+
+    # Validation should reach repo URL parsing, proving the ref was accepted.
+    assert res.status_code == 400
+    assert "Only GitHub repo URLs are supported right now." in res.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "../main",
+        "./main",
+        r"main\hack",
+    ],
+)
+def test_scan_url_invalid_refs(ref):
+    res = client.post(
+        "/scan-url",
+        data={
+            "repo_url": "https://github.com/owner/repo",
+            "ref": ref,
+            "project_name": "test_project",
+        },
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Invalid Git reference"
+
 
 client = TestClient(app)
 

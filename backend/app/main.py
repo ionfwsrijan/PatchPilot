@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from urllib.parse import quote
 
 import aiosqlite
 import httpx
@@ -81,6 +82,36 @@ try:
     import tomllib
 except ImportError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
+
+GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def validate_git_ref(ref: str) -> str:
+    if not ref:
+        raise HTTPException(status_code=400, detail="Invalid Git reference")
+
+    if len(ref) > 255:
+        raise HTTPException(status_code=400, detail="Invalid Git reference")
+
+    if not GIT_REF_RE.fullmatch(ref):
+        raise HTTPException(status_code=400, detail="Invalid Git reference")
+
+    forbidden = (
+        "..",
+        "./",
+        "\\",
+        "//",
+    )
+
+    if (
+        any(token in ref for token in forbidden)
+        or ref.startswith("/")
+        or ref.endswith("/")
+    ):
+        raise HTTPException(status_code=400, detail="Invalid Git reference")
+
+    return ref
+
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
@@ -430,7 +461,8 @@ def github_zip_url(repo_url: str, ref: str = "main") -> str:
             status_code=400, detail="Only GitHub repo URLs are supported right now."
         )
     owner, repo = m.group(1), m.group(2)
-    return f"https://github.com/{owner}/{repo}/archive/refs/heads/{ref}.zip"
+    encoded_ref = quote(ref, safe="/")
+    return f"https://github.com/{owner}/{repo}/archive/refs/heads/{encoded_ref}.zip"
 
 
 ALLOWED_REDIRECT_HOSTS = {
@@ -823,7 +855,8 @@ async def scan_url(
     archive_path = job_dir / "repo.zip"
     repo_dir = job_dir / "repo"
     ensure_dir(repo_dir)
-    zip_url = github_zip_url(repo_url, ref=ref)
+    validated_ref = validate_git_ref(ref)
+    zip_url = github_zip_url(repo_url, ref=validated_ref)
 
     try:
         await download_to_path(zip_url, archive_path)
