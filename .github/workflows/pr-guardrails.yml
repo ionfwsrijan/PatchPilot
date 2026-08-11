@@ -73,7 +73,7 @@ jobs:
               } catch (error) {}
             }
 
-            const hasLinkedIssue = prBody.includes("Closes #");
+            const hasLinkedIssue = /Closes\s+#\d+/.test(prBody);
 
             const requiredPhrases = [
               "## Linked issue",
