@@ -102,6 +102,44 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## Configuration
+
+PatchPilot's behaviour can be tuned through environment variables. Set them before starting the backend server.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCAN_RATE_LIMIT` | `5/minute` | Maximum number of scan requests allowed per IP per time window. Accepts any [limits string](https://limits.readthedocs.io/en/stable/string-notation.html) understood by the `limits` library, e.g. `10/minute`, `100/hour`, `1/second`. |
+| `MAX_UPLOAD_MB` | `100` | Maximum ZIP upload size in megabytes. |
+| `PATCHPILOT_WORKDIR` | system temp dir | Root directory where scan workspaces are stored. |
+| `PATCHPILOT_API_KEY` | *(unset — auth disabled)* | When set, all API requests must supply `Authorization: Bearer <key>`. |
+| `ALLOWED_ORIGINS` | localhost ports | Comma-separated list of extra CORS origins to allow. |
+| `ACTIVE_SCANS_RETENTION_SECONDS` | `600` | How long completed scan progress entries are kept in memory for SSE streaming clients. |
+| `DISABLE_DEDUP` | `false` | Set to `true` to skip embedding-based finding deduplication. |
+| `DEDUP_EPSILON` | `0.15` | Cosine-distance threshold for the deduplicator. |
+
+### Rate Limiting Details
+
+`SCAN_RATE_LIMIT` applies **per client IP** to both the `POST /scan` and `POST /scan-url` endpoints, which are the most resource-intensive operations in PatchPilot (they invoke Semgrep, OSV-Scanner, and Gitleaks).
+
+When the limit is exceeded the server responds with:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+Content-Type: application/json
+
+{"detail": "Rate limit exceeded: 5 per 1 minute. Please retry after 60 second(s)."}
+```
+
+Example — set a stricter limit for a production deployment:
+
+```bash
+export SCAN_RATE_LIMIT="3/minute"
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
 ## ML roadmap
 
 PatchPilot is being transformed from a rule-based scanner into an intelligent, self-improving security platform — layer by layer. All models use free, locally-running tools (no API keys).

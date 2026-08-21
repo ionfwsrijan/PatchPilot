@@ -31,8 +31,10 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 
 from .db import (
     create_findings,
@@ -94,6 +96,43 @@ except ValueError:
 MAX_UPLOAD_MB = max(1, MAX_UPLOAD_MB)
 MAX_UPLOAD_SIZE = MAX_UPLOAD_MB * 1024 * 1024
 
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+_SCAN_RATE_LIMIT_RAW = os.environ.get("SCAN_RATE_LIMIT", "5/minute")
+SCAN_RATE_LIMIT: str = _SCAN_RATE_LIMIT_RAW if _SCAN_RATE_LIMIT_RAW.strip() else "5/minute"
+
+def _get_client_ip(request: Request) -> str:
+    """Extract the real client IP.
+
+    Reads the *first* address from the ``X-Forwarded-For`` header when
+    present (correct for deployments behind a reverse proxy such as nginx
+    or a cloud load-balancer). Falls back to the direct TCP peer address.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        # The leftmost entry is the original client; later entries are proxies.
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+
+limiter = Limiter(key_func=_get_client_ip)
+
+# Rate limiting dependency for scan endpoints.
+# We use Depends() rather than @limiter.limit() directly on the endpoint
+# functions because `from __future__ import annotations` (active at the top
+# of this module) converts all type hints to lazy strings. slowapi's
+# functools.wraps wrapper then presents those strings under extension.py's
+# globals — where FastAPI's dependency resolver cannot find FastAPI-specific
+# types such as BackgroundTasks or UploadFile, causing 422 errors.
+# The dependency below only needs `request: Request`, which IS present in
+# slowapi's module scope and therefore resolves correctly.
+
+
+@limiter.limit(SCAN_RATE_LIMIT)
+async def _scan_rate_limit(request: Request) -> None:  # noqa: RUF029
+    """Per-IP rate limit guard shared by /scan and /scan-url."""
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,6 +145,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PatchPilot API", version="0.1.0", lifespan=lifespan)
+
+# Attach limiter to app state so slowapi middleware can find it.
+app.state.limiter = limiter
+
+
+async def _rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
+    """Return HTTP 429 with a Retry-After header when the rate limit is hit."""
+    retry_after = getattr(exc, "retry_after", 60)
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": (
+                f"Rate limit exceeded: {exc.detail}. "
+                f"Please retry after {retry_after} second(s)."
+            )
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -704,9 +766,11 @@ async def _run_single_scan_task(
         "to monitor scan progress and retrieve results."
     ),
     response_model=dict,
+    dependencies=[Depends(_scan_rate_limit)],
     responses={
         400: {"description": "Invalid ZIP archive or upload error."},
         413: {"description": "Uploaded file exceeds the maximum allowed size."},
+        429: {"description": "Scan rate limit exceeded."},
         500: {"description": "Internal server error."},
     },
 )
@@ -791,14 +855,16 @@ async def scan(
         "asynchronous security scan. Returns a job ID for tracking "
         "the scan progress and results."
     ),
+    dependencies=[Depends(_scan_rate_limit)],
     responses={
         400: {"description": "Invalid repository URL or repository download failed."},
         404: {"description": "Repository or branch not found."},
-        429: {"description": "GitHub API rate limit exceeded."},
+        429: {"description": "Scan rate limit exceeded."},
         500: {"description": "Internal server error."},
     },
 )
 async def scan_url(
+    request: Request,
     background_tasks: BackgroundTasks,
     repo_url: str = Form(
         ...,

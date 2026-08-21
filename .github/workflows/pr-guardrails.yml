@@ -15,12 +15,6 @@ jobs:
       issues: write
       contents: read
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
       - name: Validate PR Template & Auto-Label
         uses: actions/github-script@v7
         with:
@@ -79,7 +73,7 @@ jobs:
               } catch (error) {}
             }
 
-            const hasLinkedIssue = prBody.includes("Closes #");
+            const hasLinkedIssue = /Closes\s+#\d+/.test(prBody);
 
             const requiredPhrases = [
               "## Linked issue",
@@ -245,8 +239,7 @@ jobs:
                   body: commentBody
                 });
               }
-              
-              core.setFailed("🚨 PR Template Validation Failed: Missing required sections, explanations, or checkboxes.");
+              throw new Error("🚨 PR Template Validation Failed: Missing required sections, explanations, or checkboxes.");
               
             } else {
               // ── Validation passed ──────────────────────────────────────────
