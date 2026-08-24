@@ -330,7 +330,7 @@ export function Verify() {
 
       {/* Actions */}
       <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-end">
-        <Link to="/findings">
+        <Link to={scan?.job_id ? `/findings?job_id=${scan.job_id}` : "/findings"}>
           <Button variant="outline">View All Findings</Button>
         </Link>
         <Link to="/dashboard">

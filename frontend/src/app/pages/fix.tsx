@@ -88,11 +88,9 @@ export function Fix() {
       const response = await fix(scan.job_id, findingIds);
 
       setBackendFixes(response.fixes || []);
-      const findingsResponse: any = await getJobFindings(scan.job_id);
+      const findingsResponse = await getJobFindings(scan.job_id);
 
-      const actualFindings = Array.isArray(findingsResponse)
-        ? findingsResponse
-        : findingsResponse.findings ?? [];
+      const actualFindings = findingsResponse.findings || [];
 
       setFindings(
         actualFindings.map((bf: any) =>

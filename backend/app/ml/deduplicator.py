@@ -1,6 +1,9 @@
+import logging
 from collections import defaultdict
 
 from sklearn.cluster import DBSCAN
+
+logger = logging.getLogger(__name__)
 
 
 def get_model():
@@ -41,7 +44,11 @@ def deduplicate(
     if not SENTENCE_TRANSFORMERS_AVAILABLE:
         return findings
 
-    embeddings = embed_findings(findings)
+    try:
+        embeddings = embed_findings(findings)
+    except Exception as exc:
+        logger.warning("Finding deduplication skipped: %s", exc)
+        return findings
 
     clustering = DBSCAN(
         eps=epsilon,

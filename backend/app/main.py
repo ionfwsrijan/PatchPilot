@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import uuid
@@ -82,6 +83,11 @@ try:
     import tomllib
 except ImportError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
+
+# Prepend the virtual environment's executable directory to PATH to auto-detect scanners
+venv_bin = os.path.dirname(sys.executable)
+if venv_bin and venv_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = venv_bin + os.pathsep + os.environ.get("PATH", "")
 
 _MAX_UPLOAD_MB_RAW = os.environ.get("MAX_UPLOAD_MB")
 RANKER = load_ranker()
@@ -1220,6 +1226,38 @@ async def download_audit_pdf(job_id: str):
 
 
 @app.get(
+    "/jobs",
+    dependencies=[Depends(verify_api_key)],
+)
+async def list_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    db = await get_db()
+    try:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT COUNT(*) as total FROM jobs")
+        total_row = await cur.fetchone()
+        total = total_row["total"] if total_row else 0
+
+        cur = await db.execute(
+            """
+            SELECT job_id, project_name, scan_method, status,
+                   finding_count, raw_finding_count, created_at
+            FROM jobs
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    return {"total": total, "jobs": [dict(r) for r in rows]}
+
+
+@app.get(
     "/jobs/{job_id}/findings",
     dependencies=[Depends(verify_api_key)],
 )
@@ -1246,6 +1284,7 @@ async def get_findings(job_id: str):
 
     return {
         "job_id": job_id,
+        "project_name": job_row.get("project_name") if job_row else None,
         "raw_finding_count": raw_finding_count,
         "finding_count": finding_count,
         "findings": findings,
