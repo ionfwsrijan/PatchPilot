@@ -562,10 +562,33 @@ async def _apply_fp_predictor(findings: List[Finding]) -> None:
             }
         )
 
+    # adjust_scores guarantees len(adjusted_scores) == len(ml_input), but we
+    # validate here as a second line of defence: a length mismatch would cause
+    # zip() to silently skip tail findings, leaving them with stale ml_scores.
     adjusted_scores = await run_in_threadpool(predictor.adjust_scores, ml_input)
 
-    for f, new_score in zip(findings, adjusted_scores):
-        f.ml_score = new_score
+    if len(adjusted_scores) != len(findings):
+        logger.error(
+            "FP predictor returned %d scores for %d findings — "
+            "length mismatch detected; skipping ML score update to prevent "
+            "silent truncation.",
+            len(adjusted_scores),
+            len(findings),
+        )
+        return
+
+    # Index-based iteration provides an explicit safety net: if a future code
+    # change somehow produces a shorter list, we log a warning per missing
+    # index rather than silently dropping findings.
+    for i in range(len(findings)):
+        if i >= len(adjusted_scores):
+            logger.warning(
+                "FP predictor returned fewer scores than findings at index %d; "
+                "remaining findings will not have their ml_score updated.",
+                i,
+            )
+            break
+        findings[i].ml_score = adjusted_scores[i]
 
 
 def _maybe_use_single_top_folder(repo_dir: Path) -> Path:

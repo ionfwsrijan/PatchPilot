@@ -59,14 +59,26 @@ class FalsePositivePredictor:
             self._models_loaded = True
 
     def adjust_scores(self, findings: list[dict]) -> list[float]:
+        """Return a list of adjusted ML scores, one per finding.
+
+        The returned list is **guaranteed** to have the same length as
+        ``findings``.  Callers may rely on this invariant; a violated
+        invariant raises ``AssertionError`` so the defect is caught
+        immediately rather than silently truncated by ``zip()``.
+        """
         self._load_models()
 
-        scores = [
+        scores: list[float] = [
             f.get("ml_score") if f.get("ml_score") is not None else 1.0
             for f in findings
         ]
 
         if not self.is_ready or not findings:
+            # Early-exit path: scores was built from findings, lengths match.
+            assert len(scores) == len(findings), (
+                f"BUG: scores length {len(scores)} != findings length {len(findings)} "
+                "on early-exit path"
+            )
             return scores
 
         try:
@@ -109,7 +121,14 @@ class FalsePositivePredictor:
 
         except Exception as e:
             logger.error(f"Error during ML inference. Skipping downranking. {e}")
+            # scores was initialised from findings above, so it still has the
+            # correct length — no re-initialisation needed.
 
+        # Invariant check: every code path must produce one score per finding .
+        assert len(scores) == len(findings), (
+            f"BUG: adjust_scores returning {len(scores)} scores for "
+            f"{len(findings)} findings — length contract violated"
+        )
         return scores
 
 
