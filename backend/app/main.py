@@ -500,6 +500,8 @@ async def download_to_path(
                         try:
                             with open(dest_path, "wb") as f:
                                 async for chunk in r.aiter_bytes(chunk_size=chunk_size):
+                                    if cancel_event and cancel_event.is_set():
+                                        raise asyncio.CancelledError("Download cancelled by user")
                                     bytes_received += len(chunk)
                                     if bytes_received > MAX_UPLOAD_SIZE:
                                         raise HTTPException(
