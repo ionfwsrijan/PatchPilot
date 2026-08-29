@@ -12,15 +12,18 @@ DB_PATH = os.environ.get(
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS org_jobs (
                 id TEXT PRIMARY KEY,
                 org_name TEXT,
                 status TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )
-        """)
-        await db.execute("""
+        """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS findings (
                 id              TEXT PRIMARY KEY,
                 job_id          TEXT NOT NULL,
@@ -43,16 +46,20 @@ async def init_db():
                 version         INTEGER DEFAULT 1,
                 created_at      TEXT DEFAULT (datetime('now'))
             )
-        """)
-        await db.execute("""
+        """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS jobs (
                 job_id       TEXT PRIMARY KEY,
                 project_name TEXT,
                 scan_method  TEXT,
                 created_at   TEXT DEFAULT (datetime('now'))
             )
-        """)
-        await db.execute("""
+        """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS verify_outcomes (
                 id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL,
@@ -60,9 +67,11 @@ async def init_db():
                 new_issues_introduced INTEGER DEFAULT 0,
                 verified_at TEXT DEFAULT (datetime('now'))
             )
-        """)
+        """
+        )
 
-        await db.execute("""
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS contributor_stats (
                 github_username TEXT PRIMARY KEY,
                 findings_closed INTEGER DEFAULT 0,
@@ -70,8 +79,10 @@ async def init_db():
                 prs_merged INTEGER DEFAULT 0,
                 last_updated TEXT DEFAULT (datetime('now'))
             )
-        """)
-        await db.execute("""
+        """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS dependency_links (
                 id TEXT PRIMARY KEY,
                 org_job_id TEXT NOT NULL,
@@ -80,8 +91,10 @@ async def init_db():
                 package_version TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             )
-        """)
-        await db.execute("""
+        """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS fixes (
                 id              TEXT PRIMARY KEY,
                 job_id          TEXT NOT NULL,
@@ -91,7 +104,8 @@ async def init_db():
                 fix_type        TEXT,   -- 'insert' | 'delete' | 'mixed' | 'none'
                 created_at      TEXT DEFAULT (datetime('now'))
             )
-        """)
+        """
+        )
 
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("PRAGMA table_info(findings)")
@@ -223,10 +237,14 @@ async def update_job_status(
 
 
 async def delete_job(db: aiosqlite.Connection, job_id: str):
-    await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
-    await db.commit()
+    try:
+        await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
 
 async def create_findings(
@@ -435,7 +453,8 @@ async def get_leaderboard_stats():
     """Fetches all contributors sorted by their weighted score."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute("""
+        cursor = await db.execute(
+            """
             SELECT 
                 github_username,
                 findings_closed,
@@ -445,7 +464,8 @@ async def get_leaderboard_stats():
                 (fixes_passed * 3) + (prs_merged * 2) + (findings_closed * 1) as total_score
             FROM contributor_stats
             ORDER BY total_score DESC
-        """)
+        """
+        )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 

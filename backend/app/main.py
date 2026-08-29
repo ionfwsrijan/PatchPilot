@@ -1360,16 +1360,27 @@ async def delete_job_endpoint(job_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not job_dir.exists():
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    safe_rmtree(job_dir)
-
     db = await get_db()
     try:
+        job = await get_job(db, job_id)
+        if not job:
+            raise HTTPException(
+                status_code=404, detail=f"No job found with id '{job_id}'"
+            )
         await delete_job(db, job_id)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Failed to delete job {job_id} from db")
+        raise HTTPException(status_code=500, detail="Database error during deletion")
     finally:
         await db.close()
+
+    if job_dir.exists():
+        try:
+            safe_rmtree(job_dir)
+        except Exception:
+            logger.warning(f"Failed to delete workspace directory for job {job_id}")
 
     return {"deleted": True}
 
