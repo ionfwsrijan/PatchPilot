@@ -1,7 +1,7 @@
 from collections import defaultdict
-
+from typing import Union, List, Dict, Any
 from sklearn.cluster import DBSCAN
-
+from app.models import Finding
 
 def get_model():
     return None
@@ -28,9 +28,9 @@ def embed_findings(findings):
 
 
 def deduplicate(
-    findings: list[dict],
+    findings: List[Union[Finding, Dict[str, Any]]],
     epsilon: float = 0.15,
-) -> list[dict]:
+) -> List[Union[Finding, Dict[str, Any]]]:
     """
     Group similar findings using DBSCAN and return
     representative findings with duplicate metadata.
