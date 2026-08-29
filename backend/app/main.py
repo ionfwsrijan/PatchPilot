@@ -741,7 +741,14 @@ async def scan(
             status_code=413,
             detail=f"Header indicates file is too large. Maximum upload size is {MAX_UPLOAD_MB}MB.",
         )
+    filename = project.filename or ""
 
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=415,
+            detail="Only .zip archives are accepted. Please compress your project and try again.",
+        )
+    
     job_id = next(tempfile._get_candidate_names())
     job_dir = WORK_ROOT / job_id
     ensure_dir(job_dir)
