@@ -1,7 +1,7 @@
 from collections import defaultdict
-
+from typing import Any, Dict, List, Union
 from sklearn.cluster import DBSCAN
-
+from app.models import Finding
 
 def get_model():
     return None
@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
 SENTENCE_TRANSFORMERS_AVAILABLE = _embed_findings is not None
 
 
-def embed_findings(findings):
+def embed_findings(findings: List[Union[Finding, Dict[str, Any]]]):
     """Wrapper so tests can patch deduplicator.embed_findings if needed."""
     if _embed_findings is None:
         raise RuntimeError(
@@ -28,12 +28,13 @@ def embed_findings(findings):
 
 
 def deduplicate(
-    findings: list[dict],
+    findings: List[Union[Finding, Dict[str, Any]]],
     epsilon: float = 0.15,
-) -> list[dict]:
+) -> List[Union[Finding, Dict[str, Any]]]:
     """
     Group similar findings using DBSCAN and return
     representative findings with duplicate metadata.
+    Handles both Pydantic Finding objects and raw dict inputs.
     """
     if not findings:
         return []
@@ -60,16 +61,10 @@ def deduplicate(
     for label, cluster_findings in clusters.items():
         if label == -1:
             for finding in cluster_findings:
-                # finding["duplicate_count"] = 0
-                # finding["related_files"] = []
                 results.append(finding)
             continue
 
         representative = cluster_findings[0]
-
-        # representative["duplicate_count"] = len(cluster_findings)
-        # representative["related_files"] = related_files
-
         results.append(representative)
 
     return results
