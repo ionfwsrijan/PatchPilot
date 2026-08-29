@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..models import VerifyResponse
-from ..utils.exec import run_cmd
+from ..utils.exec import run_cmd, run_cmd_sandboxed
 
 
 def _find_npm_command() -> Optional[str]:
@@ -52,11 +52,10 @@ def verify_repo(repo_dir: Path) -> VerifyResponse:
     checks: Dict[str, Any] = {}
 
     if (repo_dir / "package.json").exists():
-        npm_path = _find_npm_command()
-        if not npm_path:
-            checks["npm"] = {
+        if shutil.which("docker") is None:
+            checks["docker"] = {
                 "ok": False,
-                "reason": "npm not found on PATH for backend process",
+                "reason": "docker not found on PATH; sandboxed verification requires Docker",
             }
             return VerifyResponse(ok=False, checks=checks)
 
@@ -65,12 +64,12 @@ def verify_repo(repo_dir: Path) -> VerifyResponse:
                 repo_dir / "npm-shrinkwrap.json"
             ).exists()
             if has_lock:
-                r_ci = run_cmd([npm_path, "ci"], cwd=repo_dir, timeout_s=1200)
+                r_ci = run_cmd_sandboxed(["npm", "ci"], cwd=repo_dir, timeout_s=1200)
                 checks["npm_ci"] = r_ci
                 if r_ci.get("returncode") != 0:
                     return VerifyResponse(ok=False, checks=checks)
             else:
-                r_i = run_cmd([npm_path, "install"], cwd=repo_dir, timeout_s=1200)
+                r_i = run_cmd_sandboxed(["npm", "install"], cwd=repo_dir, timeout_s=1200)
                 checks["npm_install"] = r_i
                 if r_i.get("returncode") != 0:
                     return VerifyResponse(ok=False, checks=checks)
@@ -96,7 +95,7 @@ def verify_repo(repo_dir: Path) -> VerifyResponse:
             }
             return VerifyResponse(ok=True, checks=checks)
 
-        r = run_cmd([npm_path, *chosen], cwd=repo_dir, timeout_s=1200)
+        r = run_cmd_sandboxed(["npm", *chosen], cwd=repo_dir, timeout_s=1200)
         checks["npm_verify"] = {
             "selected": chosen,
             "available_scripts": sorted(list(scripts.keys())),
@@ -116,15 +115,18 @@ def verify_repo(repo_dir: Path) -> VerifyResponse:
             }
             return VerifyResponse(ok=True, checks=checks)
 
-        r = run_cmd(["pytest", "-q"], cwd=repo_dir, timeout_s=600)
-        checks["pytest"] = r
-        ok = r.get("returncode") == 0
-        return VerifyResponse(ok=ok, checks=checks)
+    r = run_cmd_sandboxed(
+                ["pytest", "-q"], cwd=repo_dir, timeout_s=600, image="python:3.11-slim"
+            )
+    checks["pytest"] = r
+    ok = r.get("returncode") == 0
+    return VerifyResponse(ok=ok, checks=checks)
 
-    r = run_cmd(
+    r = run_cmd_sandboxed(
         ["python", "-c", "print('verify: no tests detected')"],
         cwd=repo_dir,
         timeout_s=30,
+        image="python:3.11-slim"
     )
     checks["fallback"] = r
     return VerifyResponse(ok=True, checks=checks)
