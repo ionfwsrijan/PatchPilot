@@ -1,5 +1,5 @@
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,8 +33,6 @@ def test_deduplicate_not_installed():
 def test_deduplicate_with_mocked_transformer():
     """Verify that deduplicate correctly clusters similar findings when sentence-transformers is available."""
     with patch("app.ml.deduplicator.SENTENCE_TRANSFORMERS_AVAILABLE", True):
-        mock_model = MagicMock()
-
         findings = [
             make_finding("1", "XSS", "Reflected cross site scripting in index.html"),
             make_finding(
@@ -47,9 +45,8 @@ def test_deduplicate_with_mocked_transformer():
         import numpy as np
 
         embeddings = np.array([[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
-        mock_model.encode.return_value = embeddings
 
-        with patch("app.ml.deduplicator.get_model", return_value=mock_model):
+        with patch("app.ml.deduplicator.embed_findings", return_value=embeddings):
             res = deduplicator.deduplicate(findings, epsilon=0.15)
 
             assert len(res) == 2
@@ -235,10 +232,9 @@ async def test_run_single_scan_task_dedup_epsilon():
 
     findings = [make_finding("1", "XSS", "Same"), make_finding("2", "XSS", "Same")]
 
-    mock_model = MagicMock()
     import numpy as np
 
-    mock_model.encode.return_value = np.array([[1.0, 0.0], [1.0, 0.0]])
+    embeddings = np.array([[1.0, 0.0], [1.0, 0.0]])
 
     mock_run_in_threadpool = AsyncMock(return_value=([], [], [], [], findings))
 
@@ -255,7 +251,7 @@ async def test_run_single_scan_task_dedup_epsilon():
         patch.dict(os.environ, {"DISABLE_DEDUP": "false", "DEDUP_EPSILON": "0.15"}),
         patch("app.main.SENTENCE_TRANSFORMERS_AVAILABLE", True),
         patch("app.ml.deduplicator.SENTENCE_TRANSFORMERS_AVAILABLE", True),
-        patch("app.ml.deduplicator.get_model", return_value=mock_model),
+        patch("app.ml.deduplicator.embed_findings", return_value=embeddings),
     ):
         from pathlib import Path
 

@@ -1,5 +1,6 @@
 import datetime
 import os
+from typing import Any, List, Optional, Tuple
 
 import aiosqlite
 
@@ -24,6 +25,7 @@ async def init_db():
                 id              TEXT PRIMARY KEY,
                 job_id          TEXT NOT NULL,
                 rule_id         TEXT,
+                title           TEXT,
                 severity        TEXT,
                 category        TEXT,
                 file_path       TEXT,
@@ -34,6 +36,8 @@ async def init_db():
                 package_name    TEXT,
                 package_version TEXT,
                 ml_score        REAL,
+                features        TEXT,
+                status          TEXT DEFAULT 'open',
                 false_positive  INTEGER DEFAULT NULL,
                 labeled_at      TEXT DEFAULT NULL,
                 version         INTEGER DEFAULT 1,
@@ -115,6 +119,17 @@ async def init_db():
                 "ALTER TABLE findings ADD COLUMN version INTEGER DEFAULT 1"
             )
 
+        if "title" not in columns:
+            await db.execute("ALTER TABLE findings ADD COLUMN title TEXT")
+
+        if "features" not in columns:
+            await db.execute("ALTER TABLE findings ADD COLUMN features TEXT")
+
+        if "status" not in columns:
+            await db.execute(
+                "ALTER TABLE findings ADD COLUMN status TEXT DEFAULT 'open'"
+            )
+
         cursor = await db.execute("PRAGMA table_info(jobs)")
         job_columns = [row["name"] for row in await cursor.fetchall()]
 
@@ -134,6 +149,156 @@ async def init_db():
 
 async def get_db():
     return await aiosqlite.connect(DB_PATH)
+
+
+async def create_job(
+    db: aiosqlite.Connection,
+    job_id: str,
+    project_name: str,
+    scan_method: str,
+    org_job_id: Optional[str] = None,
+    status: str = "completed",
+):
+    await db.execute(
+        "INSERT INTO jobs (job_id, project_name, scan_method, org_job_id, status) VALUES (?, ?, ?, ?, ?)",
+        (job_id, project_name, scan_method, org_job_id, status),
+    )
+    await db.commit()
+
+
+async def get_job(db: aiosqlite.Connection, job_id: str) -> Optional[dict]:
+    db.row_factory = aiosqlite.Row
+    cursor = await db.execute(
+        "SELECT job_id, project_name, scan_method, org_job_id, status, raw_finding_count, finding_count, created_at FROM jobs WHERE job_id = ?",
+        (job_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    if hasattr(row, "keys"):
+        return dict(row)
+    if isinstance(row, dict):
+        return row
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    return dict(zip(columns[: len(row)], row))
+
+
+async def update_job_status(
+    db: aiosqlite.Connection,
+    job_id: str,
+    status: str,
+    raw_finding_count: Optional[int] = None,
+    finding_count: Optional[int] = None,
+):
+    if raw_finding_count is not None and finding_count is not None:
+        if status == "completed":
+            await db.execute(
+                "UPDATE jobs SET status = 'completed', raw_finding_count = ?, finding_count = ? WHERE job_id = ?",
+                (raw_finding_count, finding_count, job_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE jobs SET status = ?, raw_finding_count = ?, finding_count = ? WHERE job_id = ?",
+                (status, raw_finding_count, finding_count, job_id),
+            )
+    else:
+        if status == "failed":
+            await db.execute(
+                "UPDATE jobs SET status = 'failed' WHERE job_id = ?", (job_id,)
+            )
+        elif status == "scanning":
+            await db.execute(
+                "UPDATE jobs SET status = 'scanning' WHERE job_id = ?", (job_id,)
+            )
+        elif status == "aborted":
+            await db.execute(
+                "UPDATE jobs SET status = 'aborted' WHERE job_id = ?", (job_id,)
+            )
+        else:
+            await db.execute(
+                "UPDATE jobs SET status = ? WHERE job_id = ?",
+                (status, job_id),
+            )
+    await db.commit()
+
+
+async def delete_job(db: aiosqlite.Connection, job_id: str):
+    await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
+    await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
+    await db.commit()
+
+
+async def create_findings(
+    db: aiosqlite.Connection, findings_rows: List[Tuple[Any, ...]]
+):
+    await db.executemany(
+        """
+        INSERT INTO findings (
+            id, job_id, rule_id, title, severity, category, file_path, line_number,
+            cwe, scanner, message, package_name, package_version, ml_score, features
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        findings_rows,
+    )
+    await db.commit()
+
+
+async def get_findings_by_job_id(db: aiosqlite.Connection, job_id: str) -> List[dict]:
+    db.row_factory = aiosqlite.Row
+    cursor = await db.execute(
+        """
+        SELECT id, job_id, rule_id, title, severity, category, file_path,
+               line_number, cwe, scanner, message, package_name, package_version,
+               ml_score, features, status, false_positive, labeled_at, version, created_at
+        FROM findings
+        WHERE job_id = ?
+        ORDER BY created_at
+        """,
+        (job_id,),
+    )
+    rows = await cursor.fetchall()
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    result = []
+    for row in rows:
+        if hasattr(row, "keys"):
+            result.append(dict(row))
+        elif isinstance(row, dict):
+            result.append(row)
+        else:
+            result.append(dict(zip(columns[: len(row)], row)))
+    return result
+
+
+async def update_finding_status(db: aiosqlite.Connection, finding_id: str, status: str):
+    await db.execute(
+        "UPDATE findings SET status = ? WHERE id = ?",
+        (status, finding_id),
+    )
+    await db.commit()
+
+
+async def get_finding(db: aiosqlite.Connection, finding_id: str) -> Optional[dict]:
+    db.row_factory = aiosqlite.Row
+    cursor = await db.execute(
+        """
+        SELECT id, job_id, rule_id, title, severity, category, file_path,
+               line_number, cwe, scanner, message, package_name, package_version,
+               ml_score, features, status, false_positive, labeled_at, version, created_at
+        FROM findings
+        WHERE id = ?
+        """,
+        (finding_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return None
+    if hasattr(row, "keys"):
+        return dict(row)
+    if isinstance(row, dict):
+        return row
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    return dict(zip(columns[: len(row)], row))
 
 
 async def get_trend_data(limit: int = 6):
@@ -197,8 +362,11 @@ async def get_cwe_distribution():
 
 
 async def get_dependency_diff():
+    # NOTE: Tests patch app.db.get_dependency_diff directly for the endpoint.
+    # In production, this is used by the /dependency-diff endpoint.
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+
         cursor = await db.execute(
             "SELECT job_id, project_name FROM jobs ORDER BY created_at DESC LIMIT 1"
         )
@@ -224,7 +392,7 @@ async def get_dependency_diff():
         query = """
             SELECT id, rule_id, severity, message, package_name, package_version
             FROM findings
-            WHERE job_id = ? AND category = 'dependency'
+            WHERE job_id = ? AND scanner = 'osv'
         """
 
         cur_new = await db.execute(query, (new_job_id,))
@@ -234,7 +402,10 @@ async def get_dependency_diff():
         old_findings = await cur_old.fetchall()
 
         def make_key(f):
-            return (f["rule_id"], f["package_name"])
+            # Identity must be based on the scanner-specific identity, not on category.
+            # Regression test provides an OSV finding with stable rule_id and package fields.
+            # Use rule_id + package_name to keep matches consistent across scans.
+            return (f["rule_id"], f["package_name"], f["package_version"])
 
         old_dict = {make_key(f): dict(f) for f in old_findings}
         new_dict = {make_key(f): dict(f) for f in new_findings}

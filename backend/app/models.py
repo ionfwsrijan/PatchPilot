@@ -50,6 +50,7 @@ class Fix(BaseModel):
     files_changed: List[str] = Field(default_factory=list)
     diff: Optional[str] = None
     notes: List[str] = Field(default_factory=list)
+    fix_confidence: Optional[float] = None
 
 
 class FixRequest(BaseModel):

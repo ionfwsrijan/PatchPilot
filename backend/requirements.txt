@@ -11,3 +11,4 @@ scikit-learn
 starlette<1.0.0
 sentence-transformers
 numpy
+tomli>=2.0; python_version < "3.11"

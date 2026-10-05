@@ -1,5 +1,8 @@
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -136,6 +139,51 @@ def test_stream_org_status(mock_get_db, client):
     assert "r1" in response.text
 
 
+@pytest.mark.anyio
+async def test_org_repo_scan_keeps_api_responsive_during_blocking_scan(tmp_path):
+    from app import main
+
+    def blocking_scan(*args, **kwargs):
+        time.sleep(0.3)
+        return [], [], [], [], []
+
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchone.return_value = {"status": "scanning"}
+    mock_db = AsyncMock()
+    mock_db.execute.return_value = mock_cursor
+
+    transport = httpx.ASGITransport(app=app)
+
+    with (
+        patch("app.main.get_db", AsyncMock(return_value=mock_db)),
+        patch("app.main.download_to_path", new_callable=AsyncMock),
+        patch("app.main.unzip_to_dir"),
+        patch("app.main._scan_repo_dir", side_effect=blocking_scan),
+        patch("app.main._extract_dependencies", return_value=[]),
+        patch("app.main._apply_fp_predictor", new_callable=AsyncMock),
+    ):
+        scan_task = asyncio.create_task(
+            main._run_repo_scan_task(
+                asyncio.Semaphore(1),
+                "job-1",
+                "https://github.com/acme/repo",
+                "main",
+                "repo",
+                "org-1",
+            )
+        )
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            started_at = time.perf_counter()
+            response = await c.get("/health")
+            elapsed = time.perf_counter() - started_at
+
+        await scan_task
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+
+
 @patch("app.main.get_db", new_callable=AsyncMock)
 def test_get_org_summary(mock_get_db, client):
     mock_db = AsyncMock()
@@ -259,6 +307,88 @@ def test_extract_dependencies(tmp_path):
     assert ("vite", "4.0.0") in deps
     assert ("fastapi", "0.95.0") in deps
     assert ("pydantic", "1.10") in deps
+
+
+def test_extract_dependencies_pyproject_poetry(tmp_path):
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.10"\n'
+        'requests = "^2.28"\n'
+        'httpx = {version = "^0.27", extras = ["http2"]}\n'
+        'mylib = {git = "https://example.com/mylib.git"}\n',
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert ("requests", "^2.28") in deps
+    assert ("httpx", "^0.27") in deps
+    assert ("mylib", "unknown") in deps
+    assert all(name != "python" for name, _ in deps)
+
+
+def test_extract_dependencies_pyproject_pep621(tmp_path):
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\n"
+        'name = "demo"\n'
+        "dependencies = [\n"
+        '    "flask>=3.0",\n'
+        '    "click",\n'
+        '    "uvicorn[standard]>=0.30",\n'
+        "    \"tomli>=2.0; python_version < '3.11'\",\n"
+        "]\n",
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert ("flask", "3.0") in deps
+    assert ("click", "unknown") in deps
+    assert ("uvicorn", "0.30") in deps
+    assert ("tomli", "2.0") in deps
+
+
+def test_extract_dependencies_pyproject_dual_section_dedup(tmp_path):
+    """Poetry + PEP 621 in one pyproject.toml must not duplicate packages."""
+    from app.main import _extract_dependencies
+
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\n"
+        'name = "demo"\n'
+        'dependencies = ["requests>=2.28", "flask>=3.0"]\n'
+        "\n"
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.10"\n'
+        'requests = "^2.28"\n',
+        encoding="utf-8",
+    )
+
+    deps = _extract_dependencies(tmp_path)
+
+    names = [name for name, _ in deps]
+    assert names.count("requests") == 1
+    # Poetry section is parsed first, so its version format wins.
+    assert ("requests", "^2.28") in deps
+    assert ("flask", "3.0") in deps
+
+
+def test_extract_dependencies_pyproject_malformed(tmp_path):
+    """A broken pyproject.toml must not crash extraction of other manifests."""
+    from app.main import _extract_dependencies
+
+    (tmp_path / "pyproject.toml").write_text("[not closed", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("fastapi==0.95.0", encoding="utf-8")
+
+    deps = _extract_dependencies(tmp_path)
+
+    assert deps == [("fastapi", "0.95.0")]
 
 
 @pytest.mark.anyio

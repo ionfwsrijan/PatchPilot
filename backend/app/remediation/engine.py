@@ -19,6 +19,7 @@ def propose_fixes(repo_dir: Path, finding_ids: List[str]) -> List[Fix]:
                     summary="Secrets require rotation; PatchPilot provides safe remediation steps.",
                     files_changed=[],
                     diff=None,
+                    fix_confidence=None,
                     notes=secret_remediation_note(),
                 )
             )
@@ -32,6 +33,7 @@ def propose_fixes(repo_dir: Path, finding_ids: List[str]) -> List[Fix]:
                     summary="Dependency vulnerabilities vary by ecosystem; PatchPilot suggests upgrade workflow.",
                     files_changed=[],
                     diff=None,
+                    fix_confidence=0.65,
                     notes=dependency_upgrade_note(),
                 )
             )
@@ -47,6 +49,7 @@ def propose_fixes(repo_dir: Path, finding_ids: List[str]) -> List[Fix]:
                         "For hackathon MVP, PatchPilot focuses on verified scanning + evidence generation.",
                         "Next step: add ecosystem-specific fix templates (SQL injection, SSRF, command injection).",
                     ],
+                    fix_confidence=0.82,
                 )
             )
             continue
@@ -56,6 +59,7 @@ def propose_fixes(repo_dir: Path, finding_ids: List[str]) -> List[Fix]:
                 finding_id=fid,
                 status="skipped",
                 summary="Unsupported finding type.",
+                fix_confidence=0.25,
             )
         )
 

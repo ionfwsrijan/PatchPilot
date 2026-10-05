@@ -2,16 +2,16 @@
 
 ## Linked issue
 
-Closes #
+Closes #38
 
 ## What this PR does
 
-<!-- 2–4 sentences. What changed and why? Focus on the "what" — the issue already explains the "why". -->
+Adds a SQLite persistence layer for scan findings. Previously, findings were stored only in memory and were lost after server restarts. This PR introduces SQLite integration, a findings schema, CRUD helper functions, and persistent storage keyed by `job_id`.
 
 ## Type of change
 
 - [ ] Bug fix
-- [ ] New feature
+- [x] New feature
 - [ ] ML model / training pipeline
 - [ ] Refactor (no behaviour change)
 - [ ] Documentation
@@ -22,11 +22,11 @@ Closes #
 - [ ] Tier 1 — Triage
 - [ ] Tier 2 — Predictive
 - [ ] Tier 3 — Autonomous
-- [ ] Not ML-related
+- [x] Not ML-related
 
 ## Stack affected
 
-- [ ] Backend
+- [x] Backend
 - [ ] Frontend
 - [ ] Both
 
@@ -36,27 +36,23 @@ Closes #
 
 ### Backend
 
-<!-- List the meaningful backend changes. Delete if none. -->
-
--
+- Integrated SQLite database.
+- Added schema for storing scan findings.
+- Implemented CRUD helper functions.
+- Persisted findings using `job_id`.
+- Stored scanner type, severity, title and timestamps.
 
 ### Frontend
 
-<!-- List the meaningful frontend changes. Delete if none. -->
-
--
+- No frontend changes.
 
 ### New dependencies
 
-<!-- List any new packages added to requirements.txt or package.json, and why each is needed. Delete if none. -->
-
--
+- SQLite driver.
 
 ### Database / schema changes
 
-<!-- Describe any new tables, columns, or migrations. Delete if none. -->
-
--
+- Added SQLite schema for persistent scan findings storage.
 
 ---
 
@@ -64,23 +60,27 @@ Closes #
 
 **How did you test this?**
 
-<!-- Describe what you ran, on what kind of repo/ZIP, and what you observed. Screenshots welcome. -->
+- Ran the application locally.
+- Executed a scan.
+- Verified findings were written to SQLite.
+- Retrieved findings using `job_id`.
+- Restarted the server and confirmed findings persisted.
 
 **Checklist**
 
-- [ ] Tested locally end-to-end (upload ZIP or GitHub URL → scan → findings returned correctly)
+- [x] Tested locally end-to-end (upload ZIP or GitHub URL → scan → findings returned correctly)
 - [ ] New ML model falls back gracefully when model file is absent
-- [ ] No new `console.error` or unhandled Python exceptions introduced
+- [x] No new `console.error` or unhandled Python exceptions introduced
 - [ ] Added or updated tests where applicable
-- [ ] `requirements.txt` / `package.json` updated if new dependencies added
+- [x] `requirements.txt` / `package.json` updated if new dependencies added
 - [ ] New model files (`.pkl`, `.pt`, etc.) are gitignored, not committed
 
 ---
 
 ## Anything reviewers should focus on
 
-<!-- Is there a design decision you're unsure about? A tricky piece of logic? Tell reviewers where to look. -->
+Please review the SQLite schema, CRUD implementation, and integration with the scan workflow to ensure findings are persisted and retrieved correctly.
 
 ## Screenshots (if UI changed)
 
-<!-- Before / after screenshots or a short screen recording. Delete if not applicable. -->
+N/A (Backend-only changes)
