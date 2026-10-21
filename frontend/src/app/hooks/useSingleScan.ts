@@ -1,61 +1,17 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { scanZip, scanRepoUrl, API_BASE } from "../lib/api";
 
 export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_name: string; findings?: any[] }) => void) {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);
-  const [singleScanState, setSingleScanState] = useState<any>(null);
-  const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState<string>("");
 
-  useEffect(() => {
-    return () => {
-      if (eventSource) eventSource.close();
-    };
-  }, [eventSource]);
-
-  const watchSingleScan = useCallback((jobId: string, projectName: string) => {
-    setActiveSingleScanId(jobId);
-    setSingleScanState({ sast: 'pending', dependency: 'pending', secrets: 'pending', status: 'running' });
-
-    if (eventSource) eventSource.close();
-    const sse = new EventSource(`${API_BASE}/api/scans/${jobId}/stream`);
-
-    sse.onmessage = (event) => {
-      const parsed = JSON.parse(event.data);
-      if (parsed.error) {
-        sse.close();
-        setScanLoading(false);
-        setScanError("Live scan tracking failed.");
-        setActiveSingleScanId(null);
-        return;
-      }
-      setSingleScanState(parsed);
-
-      if (parsed.status === "completed" || parsed.status === "failed") {
-        sse.close();
-        setTimeout(async () => {
-          try {
-            const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
-            const data = await res.json();
-            setScanLoading(false);
-            onScanSuccess({ job_id: jobId, project_name: projectName, findings: data.findings || [] });
-            setActiveSingleScanId(null);
-          } catch (err) {
-            setScanLoading(false);
-            onScanSuccess({ job_id: jobId, project_name: projectName, findings: [] });
-            setActiveSingleScanId(null);
-          }
-        }, 1000);
-      }
-    };
-    
-    sse.onerror = () => {
-      if (sse.readyState === EventSource.CLOSED) setScanLoading(false);
-    };
-    
-    setEventSource(sse);
-  }, [eventSource, onScanSuccess]);
+  const closeSingleScan = useCallback(() => {
+    setActiveSingleScanId(null);
+    setActiveProjectName("");
+    setScanLoading(false);
+  }, []);
 
   const handleZipFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".zip")) {
@@ -67,7 +23,8 @@ export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_na
 
     try {
       const initRes = await scanZip(file, file.name.replace(/\.zip$/i, ""));
-      watchSingleScan(initRes.job_id, initRes.project_name);
+      setActiveSingleScanId(initRes.job_id);
+      setActiveProjectName(initRes.project_name);
     } catch (e: any) {
       setScanError(e?.message ?? "Scan failed");
       setScanLoading(false);
@@ -86,7 +43,8 @@ export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_na
     try {
       const initRes = await scanRepoUrl(trimmedUrl, ref || "main", "project");
       if (onSuccessCallback) onSuccessCallback();
-      watchSingleScan(initRes.job_id, initRes.project_name);
+      setActiveSingleScanId(initRes.job_id);
+      setActiveProjectName(initRes.project_name);
     } catch (e: any) {
       setScanError(e?.message ?? "Import from URL failed");
       setScanLoading(false);
@@ -97,9 +55,90 @@ export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_na
     scanLoading,
     scanError,
     activeSingleScanId,
-    singleScanState,
+    activeProjectName,
     handleZipFile,
     handleImportFromUrl,
-    setScanError
+    setScanError,
+    closeSingleScan,
   };
+}
+
+export function useSingleScanProgress({
+  scanId,
+  projectName,
+  onScanSuccess,
+  onScanError,
+  onClose,
+}: {
+  scanId: string | null;
+  projectName?: string;
+  onScanSuccess?: (scan: { job_id: string; project_name: string; findings?: any[] }) => void;
+  onScanError?: (error: string) => void;
+  onClose?: () => void;
+}) {
+  const [singleScanState, setSingleScanState] = useState<any>(null);
+  const onScanSuccessRef = useRef(onScanSuccess);
+  const onScanErrorRef = useRef(onScanError);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onScanSuccessRef.current = onScanSuccess;
+    onScanErrorRef.current = onScanError;
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    if (!scanId) {
+      setSingleScanState(null);
+      return;
+    }
+
+    setSingleScanState({ sast: 'pending', dependency: 'pending', secrets: 'pending', status: 'running' });
+
+    const sse = new EventSource(`${API_BASE}/api/scans/${scanId}/stream`);
+    let timeoutId: any = null;
+
+    sse.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        if (parsed.error) {
+          sse.close();
+          onScanErrorRef.current?.("Live scan tracking failed.");
+          onCloseRef.current?.();
+          return;
+        }
+        setSingleScanState(parsed);
+
+        if (parsed.status === "completed" || parsed.status === "failed") {
+          sse.close();
+          timeoutId = setTimeout(async () => {
+            try {
+              const res = await fetch(`${API_BASE}/jobs/${scanId}/findings`);
+              const data = await res.json();
+              onScanSuccessRef.current?.({ job_id: scanId, project_name: projectName || "project", findings: data.findings || [] });
+            } catch (err) {
+              onScanSuccessRef.current?.({ job_id: scanId, project_name: projectName || "project", findings: [] });
+            } finally {
+              onCloseRef.current?.();
+            }
+          }, 1000);
+        }
+      } catch (err) {
+        console.error("Error parsing scan stream event", err);
+      }
+    };
+
+    sse.onerror = () => {
+      if (sse.readyState === EventSource.CLOSED) {
+        // SSE closed
+      }
+    };
+
+    return () => {
+      sse.close();
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [scanId, projectName]);
+
+  return { singleScanState, setSingleScanState };
 }

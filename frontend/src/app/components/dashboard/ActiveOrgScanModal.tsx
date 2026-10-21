@@ -1,16 +1,34 @@
 import { Loader2, Layers, CheckCircle, AlertTriangle } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
+import { useOrgScanProgress } from "../../hooks/useOrganizationScan";
 
 interface ActiveOrgScanModalProps {
-  statusData: any;
-  expectedRepoCount: number;
-  isAborting: boolean;
-  onAbort: (mode: "pending" | "force") => void;
-  onClose: () => void;
+  orgJobId?: string | null;
+  statusData?: any;
+  expectedRepoCount?: number;
+  isAborting?: boolean;
+  onAbort?: (mode: "pending" | "force") => void;
+  onClose: (jobId?: string) => void;
 }
 
-export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, onAbort, onClose }: ActiveOrgScanModalProps) {
+export function ActiveOrgScanModal({
+  orgJobId,
+  statusData: externalStatusData,
+  expectedRepoCount = 0,
+  isAborting: externalIsAborting,
+  onAbort: externalOnAbort,
+  onClose,
+}: ActiveOrgScanModalProps) {
+  const internalProgress = useOrgScanProgress({
+    orgJobId: externalStatusData ? null : orgJobId ?? null,
+    onClose,
+  });
+
+  const statusData = externalStatusData || internalProgress.orgStatusData;
+  const isAborting = externalIsAborting !== undefined ? externalIsAborting : internalProgress.isAborting;
+  const onAbort = externalOnAbort || internalProgress.handleAbortScan;
+
   if (!statusData) return null;
 
   return (
@@ -96,7 +114,7 @@ export function ActiveOrgScanModal({ statusData, expectedRepoCount, isAborting, 
           )}
 
           {["completed", "failed", "aborted"].includes(statusData.status) && (
-            <Button size="lg" className="cursor-pointer" onClick={onClose}>
+            <Button size="lg" className="cursor-pointer" onClick={() => onClose(orgJobId || undefined)}>
               View Collected Analytics
             </Button>
           )}
