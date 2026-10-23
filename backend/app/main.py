@@ -34,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .cleanup import CLEANUP_INTERVAL_SECONDS, cleanup_expired_jobs, job_ttl_hours
 from .db import (
     create_findings,
     create_job,
@@ -102,6 +103,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Start background cleanup for finished ACTIVE_SCANS entries
     asyncio.create_task(_cleanup_active_scans_loop())
+    # Remove job workspaces and rows older than JOB_TTL_HOURS
+    asyncio.create_task(_cleanup_expired_jobs_loop())
     yield
 
 
@@ -303,6 +306,9 @@ except ValueError:
 
 ACTIVE_SCANS_RETENTION_SECONDS = max(1, ACTIVE_SCANS_RETENTION_SECONDS)
 
+# Jobs older than this are removed from disk and the database (0 disables).
+JOB_TTL_HOURS = job_ttl_hours()
+
 
 def _scan_repo_dir(
     repo_dir: Path,
@@ -399,6 +405,26 @@ async def _cleanup_active_scans_loop() -> None:
         except Exception:
             logger.exception("ACTIVE_SCANS cleanup loop error")
         await asyncio.sleep(30)
+
+
+async def _cleanup_expired_jobs_loop() -> None:
+    """Hourly removal of job workspaces and rows older than JOB_TTL_HOURS."""
+    while True:
+        try:
+            scanning = {
+                job_id
+                for job_id, state in list(ACTIVE_SCANS.items())
+                if state.get("status") not in {"completed", "failed", "aborted"}
+            }
+            await cleanup_expired_jobs(
+                WORK_ROOT,
+                JOB_TTL_HOURS,
+                active_job_ids=scanning,
+                active_org_job_ids=set(ORG_CANCEL_EVENTS),
+            )
+        except Exception:
+            logger.exception("Expired job cleanup loop error")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
 def finding_key(f: Finding):

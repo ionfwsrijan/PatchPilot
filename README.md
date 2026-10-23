@@ -82,6 +82,16 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## Configuration
+
+Backend environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `JOB_TTL_HOURS` | `24` | Jobs older than this are removed every hour: the job workspace on disk plus its `jobs`, `findings`, `verify_outcomes` and `fixes` rows. Org jobs go once all their repo jobs are gone. Scans that are still running are never removed. Set to `0` to turn cleanup off. |
+
+---
+
 ## API reference
 
 | Method | Route | Description |
