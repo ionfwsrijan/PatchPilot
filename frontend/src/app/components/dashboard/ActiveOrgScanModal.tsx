@@ -5,29 +5,19 @@ import { useOrgScanProgress } from "../../hooks/useOrganizationScan";
 
 interface ActiveOrgScanModalProps {
   orgJobId?: string | null;
-  statusData?: any;
   expectedRepoCount?: number;
-  isAborting?: boolean;
-  onAbort?: (mode: "pending" | "force") => void;
   onClose: (jobId?: string) => void;
 }
 
 export function ActiveOrgScanModal({
   orgJobId,
-  statusData: externalStatusData,
   expectedRepoCount = 0,
-  isAborting: externalIsAborting,
-  onAbort: externalOnAbort,
   onClose,
 }: ActiveOrgScanModalProps) {
-  const internalProgress = useOrgScanProgress({
-    orgJobId: externalStatusData ? null : orgJobId ?? null,
+  const { orgStatusData: statusData, isAborting, handleAbortScan: onAbort } = useOrgScanProgress({
+    orgJobId: orgJobId ?? null,
     onClose,
   });
-
-  const statusData = externalStatusData || internalProgress.orgStatusData;
-  const isAborting = externalIsAborting !== undefined ? externalIsAborting : internalProgress.isAborting;
-  const onAbort = externalOnAbort || internalProgress.handleAbortScan;
 
   if (!statusData) return null;
 

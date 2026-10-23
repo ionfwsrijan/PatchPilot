@@ -5,7 +5,6 @@ import { useSingleScanProgress } from "../../hooks/useSingleScan";
 interface ActiveSingleScanModalProps {
   scanId: string | null;
   projectName?: string;
-  scanState?: any;
   onScanSuccess?: (scan: { job_id: string; project_name: string; findings?: any[] }) => void;
   onScanError?: (error: string) => void;
   onClose?: () => void;
@@ -14,20 +13,18 @@ interface ActiveSingleScanModalProps {
 export function ActiveSingleScanModal({
   scanId,
   projectName,
-  scanState: externalScanState,
   onScanSuccess,
   onScanError,
   onClose,
 }: ActiveSingleScanModalProps) {
-  const { singleScanState } = useSingleScanProgress({
-    scanId: externalScanState ? null : scanId,
+  const { singleScanState: scanState } = useSingleScanProgress({
+    scanId,
     projectName,
     onScanSuccess,
     onScanError,
     onClose,
   });
 
-  const scanState = externalScanState || singleScanState;
   if (!scanId || !scanState) return null;
 
   return (

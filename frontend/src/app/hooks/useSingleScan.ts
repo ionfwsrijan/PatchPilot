@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { scanZip, scanRepoUrl, API_BASE } from "../lib/api";
 
-export function useSingleScan(onScanSuccess: (scan: { job_id: string; project_name: string; findings?: any[] }) => void) {
+export function useSingleScan() {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [activeSingleScanId, setActiveSingleScanId] = useState<string | null>(null);

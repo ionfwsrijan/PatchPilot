@@ -32,7 +32,7 @@ export function Dashboard() {
   const { 
     scanLoading, scanError, activeSingleScanId, activeProjectName, 
     handleZipFile, handleImportFromUrl, setScanError, closeSingleScan 
-  } = useSingleScan(handleScanSuccess);
+  } = useSingleScan();
   
   const { 
     orgScanLoading, orgScanError, activeOrgJobId, 

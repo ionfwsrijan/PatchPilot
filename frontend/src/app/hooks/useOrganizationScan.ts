@@ -31,11 +31,10 @@ export function useOrganizationScan() {
   };
 
   const closeOrgScan = useCallback((finalJobId?: string) => {
-    const jobIdToNavigate = finalJobId || activeOrgJobId;
     setActiveOrgJobId(null);
     setOrgScanLoading(false);
-    if (jobIdToNavigate) navigate(`/org-findings/${jobIdToNavigate}`);
-  }, [activeOrgJobId, navigate]);
+    if (finalJobId) navigate(`/org-findings/${finalJobId}`);
+  }, [navigate]);
 
   return {
     orgScanLoading,
@@ -115,7 +114,7 @@ export function useOrgScanProgress({
       } catch (err) {
         console.error("Failed to abort scan", err);
       }
-      onCloseRef.current?.(orgJobId);
+      onCloseRef.current?.();
       return;
     }
 
