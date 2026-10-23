@@ -30,13 +30,13 @@ export function Dashboard() {
   const { recentJobs, handleScanSuccess, onClearRecents } = useRecentJobs();
   
   const { 
-    scanLoading, scanError, activeSingleScanId, singleScanState, 
-    handleZipFile, handleImportFromUrl, setScanError 
-  } = useSingleScan(handleScanSuccess);
+    scanLoading, scanError, activeSingleScanId, activeProjectName, 
+    handleZipFile, handleImportFromUrl, setScanError, closeSingleScan 
+  } = useSingleScan();
   
   const { 
-    orgScanLoading, orgScanError, activeOrgJobId, orgStatusData, 
-    expectedRepoCount, isAborting, handleScanOrg, handleAbortScan, closeOrgScan 
+    orgScanLoading, orgScanError, activeOrgJobId, 
+    expectedRepoCount, handleScanOrg, closeOrgScan 
   } = useOrganizationScan();
 
   const isAnyLoading = scanLoading || orgScanLoading;
@@ -172,13 +172,20 @@ export function Dashboard() {
         isLoading={orgScanLoading} 
       />
 
-      <ActiveSingleScanModal scanId={activeSingleScanId} scanState={singleScanState} />
+      <ActiveSingleScanModal 
+        scanId={activeSingleScanId} 
+        projectName={activeProjectName}
+        onScanSuccess={handleScanSuccess}
+        onScanError={(err) => {
+          setScanError(err);
+          closeSingleScan();
+        }}
+        onClose={closeSingleScan}
+      />
 
       <ActiveOrgScanModal 
-        statusData={orgStatusData} 
+        orgJobId={activeOrgJobId} 
         expectedRepoCount={expectedRepoCount} 
-        isAborting={isAborting} 
-        onAbort={handleAbortScan} 
         onClose={closeOrgScan} 
       />
     </div>
