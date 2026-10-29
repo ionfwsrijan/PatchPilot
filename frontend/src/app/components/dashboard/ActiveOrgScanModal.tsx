@@ -7,16 +7,19 @@ interface ActiveOrgScanModalProps {
   orgJobId?: string | null;
   expectedRepoCount?: number;
   onClose: (jobId?: string) => void;
+  onError?: (error: string) => void;
 }
 
 export function ActiveOrgScanModal({
   orgJobId,
   expectedRepoCount = 0,
   onClose,
+  onError,
 }: ActiveOrgScanModalProps) {
   const { orgStatusData: statusData, isAborting, handleAbortScan: onAbort } = useOrgScanProgress({
     orgJobId: orgJobId ?? null,
     onClose,
+    onError,
   });
 
   if (!statusData) return null;

@@ -36,7 +36,7 @@ export function Dashboard() {
   
   const { 
     orgScanLoading, orgScanError, activeOrgJobId, 
-    expectedRepoCount, handleScanOrg, closeOrgScan 
+    expectedRepoCount, handleScanOrg, closeOrgScan, setOrgScanError 
   } = useOrganizationScan();
 
   const isAnyLoading = scanLoading || orgScanLoading;
@@ -187,6 +187,10 @@ export function Dashboard() {
         orgJobId={activeOrgJobId} 
         expectedRepoCount={expectedRepoCount} 
         onClose={closeOrgScan} 
+        onError={(err) => {
+          setOrgScanError(err);
+          closeOrgScan();
+        }}
       />
     </div>
   );

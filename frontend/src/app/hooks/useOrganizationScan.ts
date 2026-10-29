@@ -50,16 +50,20 @@ export function useOrganizationScan() {
 export function useOrgScanProgress({
   orgJobId,
   onClose,
+  onError,
 }: {
   orgJobId: string | null;
   onClose?: (jobId?: string) => void;
+  onError?: (error: string) => void;
 }) {
   const [orgStatusData, setOrgStatusData] = useState<any>(null);
   const [isAborting, setIsAborting] = useState(false);
   const onCloseRef = useRef(onClose);
+  const onErrorRef = useRef(onError);
 
   useEffect(() => {
     onCloseRef.current = onClose;
+    onErrorRef.current = onError;
   });
 
   useEffect(() => {
@@ -77,6 +81,8 @@ export function useOrgScanProgress({
         const parsed = JSON.parse(event.data);
         if (parsed.error) {
           sse.close();
+          onErrorRef.current?.(parsed.error);
+          onCloseRef.current?.();
           return;
         }
 
@@ -93,10 +99,11 @@ export function useOrgScanProgress({
       }
     };
 
-    sse.onerror = () => {
-      if (sse.readyState === EventSource.CLOSED) {
-        // SSE closed
-      }
+    sse.onerror = (err) => {
+      console.error("Error in org scan stream:", err);
+      sse.close();
+      onErrorRef.current?.("Organization batch scan stream closed unexpectedly.");
+      onCloseRef.current?.();
     };
 
     return () => {

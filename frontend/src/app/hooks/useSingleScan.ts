@@ -128,10 +128,11 @@ export function useSingleScanProgress({
       }
     };
 
-    sse.onerror = () => {
-      if (sse.readyState === EventSource.CLOSED) {
-        // SSE closed
-      }
+    sse.onerror = (err) => {
+      console.error("Error in single scan stream:", err);
+      sse.close();
+      onScanErrorRef.current?.("Live scan tracking stream closed unexpectedly.");
+      onCloseRef.current?.();
     };
 
     return () => {
