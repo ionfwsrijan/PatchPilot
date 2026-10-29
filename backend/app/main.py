@@ -397,6 +397,22 @@ async def _cleanup_active_scans_loop() -> None:
         await asyncio.sleep(30)
 
 
+def _serialize_finding_features(f: Finding) -> str | None:
+    """Serialize model features together with evidence-pack deduplication metadata."""
+    feature_data = dict(getattr(f, "features", None) or {})
+
+    duplicate_count = getattr(f, "duplicate_count", 1)
+    try:
+        feature_data["duplicate_count"] = max(1, int(duplicate_count or 1))
+    except (TypeError, ValueError):
+        feature_data["duplicate_count"] = 1
+
+    related_files = getattr(f, "related_files", [])
+    feature_data["related_files"] = list(related_files or [])
+
+    return json.dumps(feature_data) if feature_data else None
+
+
 def finding_key(f: Finding):
     """Generate a stable identifier for a finding.
     Uses rule identifier, file path, and start line so that findings from the
@@ -659,7 +675,7 @@ async def _run_single_scan_task(
                         pkg_name,
                         pkg_version,
                         f.ml_score,
-                        json.dumps(f.features) if f.features else None,
+                        _serialize_finding_features(f),
                         (
                             getattr(f, "severity_score", None)
                             if getattr(f, "severity_score", None) is not None
@@ -696,6 +712,167 @@ async def _run_single_scan_task(
             logger.exception("Failed to write failed status for job %s", job_id)
 
 
+
+@app.post(
+    "/evidence-pack",
+    summary="Generate an evidence package",
+    description=(
+        "Generates a downloadable evidence package containing raw scan "
+        "artifacts, deduplicated findings, and a summary report."
+    ),
+    responses={
+        200: {"description": "Evidence package generated successfully."},
+        404: {"description": "Specified scan job was not found."},
+        422: {"description": "Invalid request parameters."},
+        500: {"description": "Internal server error."},
+    },
+)
+async def evidence_pack(
+    job_id: str = Form(
+        ...,
+        description="Identifier of the scan job.",
+    ),
+    project_name: str = Form(
+        "project",
+        description="Display name of the project.",
+    ),
+    update_raw: bool = Form(
+        False,
+        description="Refresh raw scan artifacts before exporting.",
+    ),
+):
+    try:
+        job_dir = safe_job_dir(WORK_ROOT, job_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    repo_dir = job_dir / "repo"
+
+    if not repo_dir.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown job_id",
+        )
+
+    repo_dir = _maybe_use_single_top_folder(repo_dir)
+
+    in_memory_findings = None
+
+    # Optionally refresh scanner output and retain the findings in memory.
+    if update_raw:
+        raw_verify_dir = job_dir / "raw_verify"
+        raw_dir_name = (
+            "raw_verify" if raw_verify_dir.exists() else "raw"
+        )
+
+        try:
+            scan_result = await run_in_threadpool(
+                functools.partial(
+                    _scan_repo_dir,
+                    repo_dir,
+                    job_dir=job_dir,
+                    raw_dir_name=raw_dir_name,
+                )
+            )
+
+            if isinstance(scan_result, tuple) and len(scan_result) >= 5:
+                in_memory_findings = scan_result[4]
+            else:
+                raise RuntimeError(
+                    "_scan_repo_dir returned an unexpected result."
+                )
+
+        except Exception as exc:
+            logger.exception(
+                "Failed to refresh scanner output for job %s",
+                job_id,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to refresh scanner output.",
+            ) from exc
+
+    out_dir = job_dir / "out"
+    ensure_dir(out_dir)
+
+    db = None
+    findings = []
+    raw_finding_count = None
+    finding_count = None
+
+    try:
+        db = await get_db()
+
+        job_record = await get_job(db, job_id)
+
+        if job_record is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Unknown job_id",
+            )
+
+        db_findings = await get_findings_by_job_id(db, job_id)
+
+        findings = [
+            dict(finding)
+            for finding in (db_findings or [])
+        ]
+
+        raw_finding_count = job_record.get("raw_finding_count")
+        finding_count = job_record.get("finding_count")
+
+        if raw_finding_count is None:
+            raw_finding_count = len(findings)
+
+        if finding_count is None:
+            finding_count = len(findings)
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to retrieve findings from the database for job %s",
+            job_id,
+        )
+
+        if in_memory_findings is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Unable to retrieve saved findings. "
+                    "Retry with update_raw enabled to use fresh scan results."
+                ),
+            ) from exc
+
+        findings = in_memory_findings
+        raw_finding_count = len(findings)
+        finding_count = len(findings)
+
+    finally:
+        if db is not None:
+            await db.close()
+
+    pack_path = build_evidence_pack(
+        repo_dir=repo_dir,
+        out_dir=out_dir,
+        project_name=project_name,
+        job_id=job_id,
+        job_dir=job_dir,
+        findings=findings,
+        raw_finding_count=raw_finding_count,
+        finding_count=finding_count,
+    )
+
+    return FileResponse(
+        path=str(pack_path),
+        filename=pack_path.name,
+        media_type="application/zip",
+    )
+
 @app.post(
     "/scan",
     summary="Scan an uploaded project archive",
@@ -712,6 +889,7 @@ async def _run_single_scan_task(
         500: {"description": "Internal server error."},
     },
 )
+
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -784,22 +962,24 @@ async def scan(
     return {"job_id": job_id, "project_name": project_name, "status": "running"}
 
 
+
 @app.post(
     "/scan-url",
-    summary="Scan a GitHub repository",
+    summary="Scan a GitHub repository URL",
     description=(
-        "Downloads a GitHub repository as a ZIP archive using the "
-        "specified repository URL and branch, then starts an "
-        "asynchronous security scan. Returns a job ID for tracking "
-        "the scan progress and results."
+        "Uploads a ZIP archive containing a project, extracts it, "
+        "and starts an asynchronous security scan. "
+        "The endpoint immediately returns a job ID that can be used "
+        "to monitor scan progress and retrieve results."
     ),
+    response_model=dict,
     responses={
-        400: {"description": "Invalid repository URL or repository download failed."},
-        404: {"description": "Repository or branch not found."},
-        429: {"description": "GitHub API rate limit exceeded."},
+        400: {"description": "Invalid ZIP archive or upload error."},
+        413: {"description": "Uploaded file exceeds the maximum allowed size."},
         500: {"description": "Internal server error."},
     },
 )
+
 async def scan_url(
     background_tasks: BackgroundTasks,
     repo_url: str = Form(
@@ -1094,76 +1274,6 @@ async def verify(
     except Exception:
         logger.exception("Failed to persist verify outcome for job %s", job_id)
     return result
-
-
-@app.post(
-    "/evidence-pack",
-    summary="Generate an evidence package",
-    description=(
-        "Generates a downloadable evidence package containing scan "
-        "artifacts, reports, and supporting files for a completed "
-        "security scan. Optionally refreshes the raw scan outputs "
-        "before creating the evidence package."
-    ),
-    responses={
-        200: {"description": "Evidence package generated successfully."},
-        404: {"description": "Specified scan job was not found."},
-        422: {"description": "Invalid request parameters."},
-        500: {"description": "Internal server error."},
-    },
-)
-def evidence_pack(
-    job_id: str = Form(
-        ...,
-        description="Identifier of the scan job for which the evidence package should be generated.",
-    ),
-    project_name: str = Form(
-        "project",
-        description="Display name of the project included in the generated reports.",
-    ),
-    update_raw: bool = Form(
-        False,
-        description="If true, refreshes the raw scan results before generating the evidence package.",
-    ),
-):
-    """
-    Generate a downloadable evidence package for a completed scan.
-
-    The evidence package includes reports, raw scanner outputs, and
-    supporting artifacts that can be used for auditing, compliance,
-    or sharing scan results.
-    """
-    try:
-        job_dir = safe_job_dir(WORK_ROOT, job_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    repo_dir = job_dir / "repo"
-    if not repo_dir.exists():
-        raise HTTPException(status_code=404, detail="Unknown job_id")
-
-    repo_dir = _maybe_use_single_top_folder(repo_dir)
-
-    if update_raw:
-        verify_dir = job_dir / "raw_verify"
-        if verify_dir.exists():
-            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw_verify")
-        else:
-            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw")
-
-    out_dir = job_dir / "out"
-    ensure_dir(out_dir)
-
-    pack_path = build_evidence_pack(
-        repo_dir=repo_dir,
-        out_dir=out_dir,
-        project_name=project_name,
-        job_id=job_id,
-        job_dir=job_dir,
-    )
-    return FileResponse(
-        path=str(pack_path), filename=pack_path.name, media_type="application/zip"
-    )
 
 
 @app.get(
@@ -1582,7 +1692,7 @@ async def _run_repo_scan_task(
                             pkg_name,
                             pkg_version,
                             f.ml_score,
-                            json.dumps(f.features) if f.features else None,
+                            _serialize_finding_features(f),
                             (
                                 getattr(f, "severity_score", None)
                                 if getattr(f, "severity_score", None) is not None
