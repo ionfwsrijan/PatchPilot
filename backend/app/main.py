@@ -1197,6 +1197,7 @@ async def download_audit_pdf(job_id: str):
                 title=row.get("title") or row.get("rule_id") or "Unknown",
                 severity=row.get("severity") or "INFO",
                 category=row.get("category") or "Unknown",
+                status=row.get("status") or "open",
                 location=loc,
                 description=row.get("message") or "",
             )
@@ -1944,7 +1945,8 @@ async def get_org_findings(org_job_id: str):
                 f.file_path, 
                 f.line_number, 
                 f.cwe,
-                f.ml_score
+                f.ml_score,
+                f.status
             FROM findings f
             JOIN jobs j ON f.job_id = j.job_id
             WHERE j.org_job_id = ?

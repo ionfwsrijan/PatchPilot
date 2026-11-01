@@ -24,6 +24,13 @@ function mapTool(tool?: string): Tool {
   return allowedTools.includes(tool as Tool) ? (tool as Tool) : "semgrep";
 }
 
+export function mapStatus(status?: string): Finding["status"] {
+  if (status === "accepted" || status === "ignored") {
+    return status;
+  }
+  return "open";
+}
+
 export function mapBackendFindingToUi(f: BackendFinding): Finding {
   return {
     id: f.id,
@@ -36,7 +43,7 @@ export function mapBackendFindingToUi(f: BackendFinding): Finding {
     tool: mapTool(f.metadata?.engine),
 
     confidence: f.confidence ?? 100,
-    status: "open",
+    status: mapStatus(f.status),
     description: f.description ?? "",
     code: f.code ?? "",
     suggestedFix: f.suggested_fix,

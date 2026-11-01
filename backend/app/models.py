@@ -28,6 +28,7 @@ class Finding(BaseModel):
     severity: str
     title: str
     description: str = ""
+    status: Optional[str] = "open"
     location: Optional[Location] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     reachability: Optional[Reachability] = None

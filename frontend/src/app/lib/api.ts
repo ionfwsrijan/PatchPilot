@@ -32,6 +32,7 @@ export type BackendFinding = {
   category: string;
   title: string;
   description?: string;
+  status?: "open" | "accepted" | "ignored" | string;
 
   location?: {
     path?: string;
