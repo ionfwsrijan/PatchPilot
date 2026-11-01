@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 
@@ -34,12 +35,23 @@ def safe_job_dir(work_root: Path, job_id: str) -> Path:
 def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
     out_path = out_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as z:
-        for member_name in z.namelist():
+        for info in z.infolist():
+            member_name = info.filename
             member_path = (out_path / member_name).resolve()
             if out_path not in member_path.parents and member_path != out_path:
                 raise ValueError(
                     f"Zip Slip blocked: malicious file path detected '{member_name}'"
                 )
+
+            # Check for symlink via Unix permissions
+            mode = (info.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                link_target = z.read(info.filename).decode()
+                resolved_target = (out_dir.parent / link_target).resolve()
+                if not str(resolved_target).startswith(str(out_dir.resolve())):
+                    raise ValueError(
+                        f"Symlink target escapes: {info.filename} -> {link_target}"
+                    )
 
         z.extractall(out_dir)
 
