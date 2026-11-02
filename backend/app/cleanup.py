@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_JOB_TTL_HOURS = 24.0
 CLEANUP_INTERVAL_SECONDS = 3600
+# Wait this long after startup before the first pass, so a restart (or a test
+# that starts the app) doesn't immediately delete things.
+CLEANUP_STARTUP_DELAY_SECONDS = 60
 
 # Job ids come from tempfile._get_candidate_names(): 8 chars of [a-z0-9_].
 # Workspace folders without a jobs row are only removed when they match this,

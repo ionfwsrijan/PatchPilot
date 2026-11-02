@@ -34,7 +34,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .cleanup import CLEANUP_INTERVAL_SECONDS, cleanup_expired_jobs, job_ttl_hours
+from .cleanup import (
+    CLEANUP_INTERVAL_SECONDS,
+    CLEANUP_STARTUP_DELAY_SECONDS,
+    cleanup_expired_jobs,
+    job_ttl_hours,
+)
 from .db import (
     create_findings,
     create_job,
@@ -405,6 +410,7 @@ async def _cleanup_active_scans_loop() -> None:
 
 async def _cleanup_expired_jobs_loop() -> None:
     """Hourly removal of job workspaces and rows older than JOB_TTL_HOURS."""
+    await asyncio.sleep(CLEANUP_STARTUP_DELAY_SECONDS)
     while True:
         try:
             scanning = {
