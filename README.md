@@ -88,7 +88,7 @@ Backend environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `JOB_TTL_HOURS` | `24` | Jobs older than this are removed every hour: the job workspace on disk plus its `jobs`, `findings`, `verify_outcomes` and `fixes` rows. Org jobs go once all their repo jobs are gone. Scans that are still running are never removed. Set to `0` to turn cleanup off. |
+| `JOB_TTL_HOURS` | `24` | Jobs older than this many hours are removed by an hourly cleanup (first pass about a minute after startup): the job workspace on disk plus its `jobs`, `findings`, `verify_outcomes` and `fixes` rows. Org jobs go once all their repo jobs are gone. Scans that are still running are never removed. Jobs with no `created_at` are aged by their workspace folder's modified time, and removed if the folder is gone. Set to `0` to turn cleanup off. Must be a finite number, 0 or higher (decimals like `0.5` are fine); anything else (`nan`, `inf`, `1e999`, negative numbers, text) logs a warning and falls back to `24`. |
 
 ---
 
