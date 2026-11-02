@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 from collections.abc import Collection
@@ -31,21 +32,27 @@ def job_ttl_hours() -> float:
     """Read JOB_TTL_HOURS from the environment.
 
     Returns:
-        The TTL in hours. Falls back to 24 when unset or not a number.
-        A value of 0 or less disables cleanup.
+        The TTL in hours. 0 disables cleanup. Falls back to 24 (with a
+        warning) when the value is not a number, not finite, negative, or so
+        large that the cutoff date can't be computed.
     """
     raw = os.environ.get("JOB_TTL_HOURS")
     if not raw:
         return DEFAULT_JOB_TTL_HOURS
     try:
-        return float(raw)
-    except ValueError:
+        value = float(raw)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(raw)
+        # Catches finite values like 1e300 that still overflow datetime math.
+        datetime.now(timezone.utc) - timedelta(hours=value)
+    except (ValueError, OverflowError):
         logger.warning(
             "Invalid JOB_TTL_HOURS=%r, using default of %s hours",
             raw,
             DEFAULT_JOB_TTL_HOURS,
         )
         return DEFAULT_JOB_TTL_HOURS
+    return value
 
 
 async def cleanup_expired_jobs(

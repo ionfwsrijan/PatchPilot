@@ -224,5 +224,30 @@ def test_job_ttl_hours_from_env(monkeypatch, raw, expected):
     assert job_ttl_hours() == expected
 
 
+@pytest.mark.parametrize(
+    "raw",
+    ["nan", "NaN", "inf", "-inf", "1e999", "-1", "-0.5", "1e300", "1e9"],
+)
+def test_job_ttl_hours_rejects_unusable_values(monkeypatch, caplog, raw):
+    monkeypatch.setenv("JOB_TTL_HOURS", raw)
+
+    with caplog.at_level("WARNING", logger="app.cleanup"):
+        assert job_ttl_hours() == 24.0
+
+    assert "Invalid JOB_TTL_HOURS" in caplog.text
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("raw", ["nan", "inf", "1e999", "-3", "1e300"])
+async def test_fallback_ttl_actually_works_in_cleanup(env, monkeypatch, raw):
+    """A rejected value must leave cleanup running at 24h, not crashing or off."""
+    monkeypatch.setenv("JOB_TTL_HOURS", raw)
+    await add_job(env, "oldjob01", OLD)
+
+    removed = await cleanup_expired_jobs(env, job_ttl_hours(), now=NOW)
+
+    assert removed == 1
+
+
 def test_cleanup_interval_is_one_hour():
     assert cleanup.CLEANUP_INTERVAL_SECONDS == 3600
