@@ -66,7 +66,9 @@ async def cleanup_expired_jobs(
     """Delete jobs older than the TTL, along with their workspace and rows.
 
     Jobs that are still scanning, or that belong to an org batch that is still
-    running, are skipped even when they are past the TTL. Org jobs whose child
+    running, are skipped even when they are past the TTL. Jobs with a NULL
+    created_at are aged by their workspace folder's mtime (and removed when the
+    folder is already gone). Org jobs whose child
     jobs are all gone are removed together with their dependency links, and
     leftover workspace folders that never got a jobs row are removed once they
     are older than the TTL.
@@ -92,13 +94,21 @@ async def cleanup_expired_jobs(
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT job_id, org_job_id FROM jobs WHERE created_at < ?", (cutoff_ts,)
+            "SELECT job_id, org_job_id, created_at FROM jobs"
+            " WHERE created_at < ? OR created_at IS NULL",
+            (cutoff_ts,),
         )
-        expired = [
-            job_id
-            for job_id, org_job_id in await cursor.fetchall()
-            if job_id not in active_jobs and org_job_id not in active_orgs
-        ]
+        expired = []
+        for job_id, org_job_id, created_at in await cursor.fetchall():
+            if job_id in active_jobs or org_job_id in active_orgs:
+                continue
+            # No created_at to go by: age the job by its workspace folder, and
+            # treat it as expired when there is no folder left to judge by.
+            if created_at is None and not await asyncio.to_thread(
+                _workspace_is_older_than, work_root, job_id, cutoff.timestamp()
+            ):
+                continue
+            expired.append(job_id)
         for job_id in expired:
             await _remove_workspace(work_root, job_id)
             await delete_job(db, job_id)
@@ -106,7 +116,7 @@ async def cleanup_expired_jobs(
         cursor = await db.execute(
             """
             SELECT id FROM org_jobs
-            WHERE created_at < ?
+            WHERE (created_at < ? OR created_at IS NULL)
               AND id NOT IN (SELECT org_job_id FROM jobs WHERE org_job_id IS NOT NULL)
             """,
             (cutoff_ts,),
@@ -152,6 +162,18 @@ async def _remove_workspace(work_root: Path, job_id: str) -> None:
         return
     # rmtree on a large extracted repo can take a while, keep it off the loop.
     await asyncio.to_thread(safe_rmtree, job_dir)
+
+
+def _workspace_is_older_than(work_root: Path, job_id: str, cutoff_epoch: float) -> bool:
+    """True when the job folder is older than the cutoff, or doesn't exist."""
+    try:
+        job_dir = safe_job_dir(work_root, job_id)
+        return job_dir.stat().st_mtime < cutoff_epoch
+    except FileNotFoundError:
+        return True
+    except (ValueError, OSError):
+        # Invalid id or unreadable folder: leave it alone rather than guess.
+        return False
 
 
 def _orphan_workspaces(

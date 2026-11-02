@@ -1,4 +1,5 @@
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
 
 import aiosqlite
@@ -172,6 +173,72 @@ async def test_old_workspace_of_running_scan_without_row_is_kept(env):
     await cleanup_expired_jobs(env, 24, active_job_ids={"upload01"}, now=NOW)
 
     assert folder.exists()
+
+
+@pytest.mark.anyio
+async def test_null_created_at_with_old_workspace_is_removed(env):
+    await add_job(env, "nulljob1", None)
+    make_old(env / "nulljob1")
+
+    removed = await cleanup_expired_jobs(env, 24, now=NOW)
+
+    assert removed == 1
+    assert not (env / "nulljob1").exists()
+    for table in ("jobs", "findings", "verify_outcomes", "fixes"):
+        assert await count(table, "job_id", "nulljob1") == 0
+
+
+@pytest.mark.anyio
+async def test_null_created_at_with_recent_workspace_is_kept(env):
+    await add_job(env, "nulljob1", None)
+    stamp = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(env / "nulljob1", (stamp, stamp))
+
+    removed = await cleanup_expired_jobs(env, 24, now=NOW)
+
+    assert removed == 0
+    assert (env / "nulljob1").exists()
+    assert await count("jobs", "job_id", "nulljob1") == 1
+
+
+@pytest.mark.anyio
+async def test_null_created_at_without_workspace_is_removed(env):
+    await add_job(env, "nulljob1", None)
+    shutil.rmtree(env / "nulljob1")
+
+    removed = await cleanup_expired_jobs(env, 24, now=NOW)
+
+    assert removed == 1
+    assert await count("jobs", "job_id", "nulljob1") == 0
+    assert await count("findings", "job_id", "nulljob1") == 0
+
+
+@pytest.mark.anyio
+async def test_null_created_at_running_scan_is_kept(env):
+    await add_job(env, "nulljob1", None)
+    make_old(env / "nulljob1")
+
+    removed = await cleanup_expired_jobs(env, 24, active_job_ids={"nulljob1"}, now=NOW)
+
+    assert removed == 0
+    assert await count("jobs", "job_id", "nulljob1") == 1
+
+
+@pytest.mark.anyio
+async def test_null_created_at_org_job_without_children_is_removed(env):
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO org_jobs (id, org_name, status, created_at) VALUES ('org-1', 'acme', 'completed', NULL)"
+        )
+        await conn.execute(
+            "INSERT INTO org_jobs (id, org_name, status, created_at) VALUES ('org-2', 'acme', 'scanning', NULL)"
+        )
+        await conn.commit()
+
+    await cleanup_expired_jobs(env, 24, active_org_job_ids={"org-2"}, now=NOW)
+
+    assert await count("org_jobs", "id", "org-1") == 0
+    assert await count("org_jobs", "id", "org-2") == 1
 
 
 @pytest.mark.anyio
