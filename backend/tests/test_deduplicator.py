@@ -91,7 +91,7 @@ def test_findings_response_shape():
         ),
     ]
 
-    from tests.test_job_endpoints import cursor
+    from test_job_endpoints import cursor
 
     job_cur = cursor(("job_id", "raw_finding_count", "finding_count"), one=job_row)
     data_cur = cursor(
@@ -150,7 +150,7 @@ def test_findings_response_shape_defaults():
         )
     ]
 
-    from tests.test_job_endpoints import cursor
+    from test_job_endpoints import cursor
 
     job_cur = cursor(("job_id", "raw_finding_count", "finding_count"), one=job_row)
     data_cur = cursor(
