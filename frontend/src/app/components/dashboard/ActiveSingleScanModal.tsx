@@ -1,12 +1,30 @@
 import { Loader2 } from "lucide-react";
 import { cn } from "../ui/utils";
+import { useSingleScanProgress } from "../../hooks/useSingleScan";
 
 interface ActiveSingleScanModalProps {
   scanId: string | null;
-  scanState: any;
+  projectName?: string;
+  onScanSuccess?: (scan: { job_id: string; project_name: string; findings?: any[] }) => void;
+  onScanError?: (error: string) => void;
+  onClose?: () => void;
 }
 
-export function ActiveSingleScanModal({ scanId, scanState }: ActiveSingleScanModalProps) {
+export function ActiveSingleScanModal({
+  scanId,
+  projectName,
+  onScanSuccess,
+  onScanError,
+  onClose,
+}: ActiveSingleScanModalProps) {
+  const { singleScanState: scanState } = useSingleScanProgress({
+    scanId,
+    projectName,
+    onScanSuccess,
+    onScanError,
+    onClose,
+  });
+
   if (!scanId || !scanState) return null;
 
   return (

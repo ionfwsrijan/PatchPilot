@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 import {
   PieChart,
   Pie,
@@ -33,7 +33,7 @@ const TOTAL_LABEL_STYLE: React.CSSProperties = {
   pointerEvents: "none",
 };
 
-export function CweChart() {
+export const CweChart = memo(function CweChart() {
   const [data, setData] = useState<CweData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -217,4 +217,4 @@ export function CweChart() {
       </CardContent>
     </Card>
   );
-}
+});

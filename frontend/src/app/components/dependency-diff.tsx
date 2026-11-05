@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, memo } from "react";
 import { getDependencyDiff, type DependencyDiffResult } from "../lib/api";
 
-export const DependencyDiff: React.FC = () => {
+export const DependencyDiff: React.FC = memo(() => {
   const [data, setData] = useState<DependencyDiffResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -161,4 +161,4 @@ export const DependencyDiff: React.FC = () => {
       )}
     </div>
   );
-};
+});

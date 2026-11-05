@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
@@ -12,7 +13,7 @@ interface RecentScansProps {
   onClearRecents: () => void;
 }
 
-export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
+export const RecentScans = memo(function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
     return new Intl.DateTimeFormat("en-US", {
@@ -110,4 +111,4 @@ export function RecentScans({ recentJobs, onClearRecents }: RecentScansProps) {
       </CardContent>
     </Card>
   );
-}
+});

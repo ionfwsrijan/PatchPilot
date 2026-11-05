@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo } from "react";
 import {
   LineChart,
   Line,
@@ -17,7 +17,7 @@ import {
 } from "./ui/card";
 import { getTrends, type TrendData } from "../lib/api";
 
-export function TrendChart() {
+export const TrendChart = memo(function TrendChart() {
   const [data, setData] = useState<TrendData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -119,4 +119,4 @@ export function TrendChart() {
       </CardContent>
     </Card>
   );
-}
+});
