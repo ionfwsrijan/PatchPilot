@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { scanZip, scanRepoUrl, API_BASE } from "../lib/api";
+import {scanZip,scanRepoUrl,API_BASE,authFetch,} from "../lib/api";
 
 export function useSingleScan() {
   const [scanLoading, setScanLoading] = useState(false);
@@ -112,16 +112,33 @@ export function useSingleScanProgress({
         if (parsed.status === "completed" || parsed.status === "failed") {
           sse.close();
           timeoutId = setTimeout(async () => {
-            try {
-              const res = await fetch(`${API_BASE}/jobs/${scanId}/findings`);
-              const data = await res.json();
-              onScanSuccessRef.current?.({ job_id: scanId, project_name: projectName || "project", findings: data.findings || [] });
-            } catch (err) {
-              onScanSuccessRef.current?.({ job_id: scanId, project_name: projectName || "project", findings: [] });
-            } finally {
-              onCloseRef.current?.();
-            }
-          }, 1000);
+  try {
+    const res = await authFetch(
+      `${API_BASE}/jobs/${scanId}/findings`
+    );
+
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+
+    const data = await res.json();
+
+    onScanSuccessRef.current?.({
+      job_id: scanId,
+      project_name: projectName || "project",
+      findings: data.findings || [],
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Failed to fetch scan findings.";
+
+    onScanErrorRef.current?.(message);
+  } finally {
+    onCloseRef.current?.();
+  }
+}, 1000);
         }
       } catch (err) {
         console.error("Error parsing scan stream event", err);

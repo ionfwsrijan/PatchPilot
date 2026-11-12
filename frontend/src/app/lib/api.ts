@@ -2,6 +2,40 @@ export const API_BASE =
   import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ||
   "http://localhost:8000";
 
+  
+const API_KEY = import.meta.env.VITE_PATCHPILOT_API_KEY;
+
+export async function authFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const headers = new Headers(options.headers);
+
+  if (API_KEY) {
+    headers.set("Authorization", `Bearer ${API_KEY}`);
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    throw new Error(
+      "Authentication failed. Please check your API key configuration."
+    );
+  }
+
+  if (response.status === 403) {
+    throw new Error(
+      "Access denied. You do not have permission to perform this action."
+    );
+  }
+
+  return response;
+}
+
+
 export type HealthResponse = {
   ok: boolean;
   status: "healthy" | "degraded";
@@ -103,7 +137,7 @@ export async function scanRepoUrl(
   return (await res.json()) as ScanInitResponse;
 }
 export async function getJobFindings(jobId: string): Promise<BackendFinding[]> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}/findings`);
+  const res = await authFetch(`${API_BASE}/jobs/${jobId}/findings`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as BackendFinding[];
 }
@@ -196,7 +230,7 @@ export type TrendData = {
 };
 
 export async function getTrends(limit = 6) {
-  const res = await fetch(`${API_BASE}/trends?limit=${limit}`);
+  const res = await authFetch(`${API_BASE}/trends?limit=${limit}`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as TrendData[];
 }
@@ -207,7 +241,7 @@ export type CweData = {
 };
 
 export async function getCweDistribution() {
-  const res = await fetch(`${API_BASE}/cwe-distribution`);
+  const res = await authFetch(`${API_BASE}/cwe-distribution`);
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as CweData[];
 }
@@ -228,7 +262,7 @@ export interface DependencyDiffResult {
 }
 
 export const getDependencyDiff = async (): Promise<DependencyDiffResult> => {
-  const response = await fetch(`${API_BASE}/dependency-diff`);
+  const response = await authFetch(`${API_BASE}/dependency-diff`);
   if (!response.ok) {
     throw new Error("Failed to fetch dependency diff");
   }
@@ -252,23 +286,25 @@ export interface LeaderboardUpdateRequest {
 }
 
 export async function getLeaderboard(): Promise<ContributorStat[]> {
-  const res = await fetch(`${API_BASE}/leaderboard`);
+  const res = await authFetch(`${API_BASE}/leaderboard`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function updateLeaderboard(data: LeaderboardUpdateRequest) {
-  const res = await fetch(`${API_BASE}/leaderboard/update`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
+  const res = await authFetch(`${API_BASE}/leaderboard/update`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(data),
+});
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function downloadAuditReport(jobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/${jobId}/report/pdf`);
+  const res = await authFetch(
+  `${API_BASE}/api/scans/${jobId}/report/pdf`
+);
   
   if (!res.ok) {
     throw new Error(await res.text());
@@ -291,11 +327,11 @@ export type OrgJobStatusResponse = {
 };
 
 export async function scanOrganization(orgUrl: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ org_url: orgUrl }),
-  });
+  const res = await authFetch(`${API_BASE}/api/scans/org`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ org_url: orgUrl }),
+});
 
   if (!res.ok) {
     throw new Error(await res.text());
@@ -305,7 +341,9 @@ export async function scanOrganization(orgUrl: string) {
 }
 
 export async function getOrgJobStatus(orgJobId: string) {
-  const res = await fetch(`${API_BASE}/api/scans/org/${orgJobId}/status`);
+  const res = await authFetch(
+  `${API_BASE}/api/scans/org/${orgJobId}/status`
+);
 
   if (!res.ok) {
     throw new Error(await res.text());
@@ -351,12 +389,14 @@ export async function downloadOrgAuditReport(orgJobId: string) {
 }
 
 export const getOrgBlastRadius = async (orgJobId: string) => {
-  const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-  const response = await fetch(`${baseUrl}/api/scans/org/${orgJobId}/blast-radius`);
-  
+  const response = await authFetch(
+    `${API_BASE}/api/scans/org/${orgJobId}/blast-radius`
+  );
+
   if (!response.ok) {
-    throw new Error('Failed to fetch blast radius data');
+    throw new Error("Failed to fetch blast radius data");
   }
+
   return response.json();
 };
 
