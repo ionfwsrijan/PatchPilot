@@ -229,10 +229,19 @@ async def update_job_status(
 
 
 async def delete_job(db: aiosqlite.Connection, job_id: str):
-    await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
-    await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
-    await db.commit()
+    """Delete a job and its findings, verify outcomes and fixes in one transaction.
+
+    If any of the deletes fails, nothing is deleted and the error is re-raised.
+    """
+    try:
+        await db.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM findings WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM verify_outcomes WHERE job_id = ?", (job_id,))
+        await db.execute("DELETE FROM fixes WHERE job_id = ?", (job_id,))
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
 
 async def create_findings(

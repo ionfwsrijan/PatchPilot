@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
@@ -31,9 +31,17 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .cleanup import (
+    CLEANUP_INTERVAL_SECONDS,
+    CLEANUP_STARTUP_DELAY_SECONDS,
+    JobWorkspaceRemovedError,
+    cleanup_expired_jobs,
+    job_in_use,
+    job_ttl_hours,
+)
 from .db import (
     create_findings,
     create_job,
@@ -103,10 +111,22 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Start background cleanup for finished ACTIVE_SCANS entries
     asyncio.create_task(_cleanup_active_scans_loop())
+    # Remove job workspaces and rows older than JOB_TTL_HOURS
+    asyncio.create_task(_cleanup_expired_jobs_loop())
     yield
 
 
 app = FastAPI(title="PatchPilot API", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(JobWorkspaceRemovedError)
+async def _job_workspace_removed_handler(
+    request: Request, exc: JobWorkspaceRemovedError
+):
+    # The expired-job cleanup claimed this job between the existence check and
+    # the request starting to use it: same answer as for any removed job.
+    return JSONResponse(status_code=404, content={"detail": "Unknown job_id"})
+
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -293,6 +313,9 @@ except ValueError:
 
 ACTIVE_SCANS_RETENTION_SECONDS = max(1, ACTIVE_SCANS_RETENTION_SECONDS)
 
+# Jobs older than this are removed from disk and the database (0 disables).
+JOB_TTL_HOURS = job_ttl_hours()
+
 
 def _scan_repo_dir(
     repo_dir: Path,
@@ -395,6 +418,34 @@ async def _cleanup_active_scans_loop() -> None:
         except Exception:
             logger.exception("ACTIVE_SCANS cleanup loop error")
         await asyncio.sleep(30)
+
+
+async def _cleanup_expired_jobs_loop() -> None:
+    """Hourly removal of job workspaces and rows idle for more than JOB_TTL_HOURS.
+
+    NOTE: "still running" is decided from ACTIVE_SCANS and ORG_CANCEL_EVENTS
+    (and the in-use registry in cleanup.py), which live in this process's
+    memory. That is only reliable with a single API process. With several
+    workers (uvicorn --workers N, gunicorn) a worker doesn't see the scans of
+    the others, so run a single worker or set JOB_TTL_HOURS=0.
+    """
+    await asyncio.sleep(CLEANUP_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            scanning = {
+                job_id
+                for job_id, state in list(ACTIVE_SCANS.items())
+                if state.get("status") not in {"completed", "failed", "aborted"}
+            }
+            await cleanup_expired_jobs(
+                WORK_ROOT,
+                JOB_TTL_HOURS,
+                active_job_ids=scanning,
+                active_org_job_ids=set(ORG_CANCEL_EVENTS),
+            )
+        except Exception:
+            logger.exception("Expired job cleanup loop error")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
 def finding_key(f: Finding):
@@ -952,8 +1003,9 @@ def fix(req: FixRequest, background_tasks: BackgroundTasks):
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
-    repo_dir = _maybe_use_single_top_folder(repo_dir)
-    fixes = propose_fixes(repo_dir, req.finding_ids)
+    with job_in_use(req.job_id, job_dir):
+        repo_dir = _maybe_use_single_top_folder(repo_dir)
+        fixes = propose_fixes(repo_dir, req.finding_ids)
 
     background_tasks.add_task(_record_fixes_to_db, req.job_id, fixes)
 
@@ -1023,77 +1075,84 @@ async def verify(
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
-    repo_dir = _maybe_use_single_top_folder(repo_dir)
-
-    result = await run_in_threadpool(verify_repo, repo_dir)
-
+    baseline_job_dir = None
     if baseline_job_id is not None:
         try:
-            safe_job_dir(WORK_ROOT, baseline_job_id)
+            baseline_job_dir = safe_job_dir(WORK_ROOT, baseline_job_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    baseline_job_id = baseline_job_id or job_id
-    baseline_findings = await get_baseline_findings(baseline_job_id)
+    # Keep the expired-job cleanup away from the job (and the baseline job whose
+    # findings are compared against) for as long as the verify run takes.
+    with ExitStack() as in_use:
+        in_use.enter_context(job_in_use(job_id, job_dir))
+        if baseline_job_dir is not None and baseline_job_id != job_id:
+            in_use.enter_context(job_in_use(baseline_job_id, baseline_job_dir))
+        repo_dir = _maybe_use_single_top_folder(repo_dir)
 
-    _, _, _, _, findings = await run_in_threadpool(
-        functools.partial(
-            _scan_repo_dir,
-            repo_dir,
-            job_dir=job_dir,
-            raw_dir_name="raw_verify",
-        )
-    )
+        result = await run_in_threadpool(verify_repo, repo_dir)
 
-    current_findings = {finding_key(f) for f in findings}
+        baseline_job_id = baseline_job_id or job_id
+        baseline_findings = await get_baseline_findings(baseline_job_id)
 
-    new_findings = current_findings - baseline_findings
-
-    new_issues_introduced = len(new_findings)
-    logger.info(
-        "Verify detected %d new findings for job %s",
-        new_issues_introduced,
-        job_id,
-    )
-
-    passed = 1 if result.ok and new_issues_introduced == 0 else 0
-
-    verify_dir = job_dir / "raw_verify"
-    verify_dir.mkdir(parents=True, exist_ok=True)
-    verify_report = {
-        "verified_at": datetime.now(timezone.utc).isoformat(),
-        "passed": bool(passed),
-        "new_issues_introduced": new_issues_introduced,
-        "baseline_job_id": baseline_job_id,
-    }
-    await run_in_threadpool(
-        (verify_dir / "verification-report.json").write_text,
-        json.dumps(verify_report, indent=2),
-        encoding="utf-8",
-    )
-
-    try:
-        db = await get_db()
-        try:
-            await db.execute(
-                """
-                INSERT INTO verify_outcomes
-                (id, job_id, passed, new_issues_introduced)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    job_id,
-                    passed,
-                    new_issues_introduced,
-                ),
+        _, _, _, _, findings = await run_in_threadpool(
+            functools.partial(
+                _scan_repo_dir,
+                repo_dir,
+                job_dir=job_dir,
+                raw_dir_name="raw_verify",
             )
-            await db.commit()
-        finally:
-            await db.close()
-    except Exception:
-        logger.exception("Failed to persist verify outcome for job %s", job_id)
-    return result
+        )
+
+        current_findings = {finding_key(f) for f in findings}
+
+        new_findings = current_findings - baseline_findings
+
+        new_issues_introduced = len(new_findings)
+        logger.info(
+            "Verify detected %d new findings for job %s",
+            new_issues_introduced,
+            job_id,
+        )
+
+        passed = 1 if result.ok and new_issues_introduced == 0 else 0
+
+        verify_dir = job_dir / "raw_verify"
+        verify_dir.mkdir(parents=True, exist_ok=True)
+        verify_report = {
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "passed": bool(passed),
+            "new_issues_introduced": new_issues_introduced,
+            "baseline_job_id": baseline_job_id,
+        }
+        await run_in_threadpool(
+            (verify_dir / "verification-report.json").write_text,
+            json.dumps(verify_report, indent=2),
+            encoding="utf-8",
+        )
+
+        try:
+            db = await get_db()
+            try:
+                await db.execute(
+                    """
+                    INSERT INTO verify_outcomes
+                    (id, job_id, passed, new_issues_introduced)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        job_id,
+                        passed,
+                        new_issues_introduced,
+                    ),
+                )
+                await db.commit()
+            finally:
+                await db.close()
+        except Exception:
+            logger.exception("Failed to persist verify outcome for job %s", job_id)
+        return result
 
 
 @app.post(
@@ -1142,25 +1201,28 @@ def evidence_pack(
     if not repo_dir.exists():
         raise HTTPException(status_code=404, detail="Unknown job_id")
 
-    repo_dir = _maybe_use_single_top_folder(repo_dir)
+    # Building the pack reads the workspace (and can re-run the scanners), so
+    # keep the expired-job cleanup away from it until the pack file is written.
+    with job_in_use(job_id, job_dir):
+        repo_dir = _maybe_use_single_top_folder(repo_dir)
 
-    if update_raw:
-        verify_dir = job_dir / "raw_verify"
-        if verify_dir.exists():
-            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw_verify")
-        else:
-            _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw")
+        if update_raw:
+            verify_dir = job_dir / "raw_verify"
+            if verify_dir.exists():
+                _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw_verify")
+            else:
+                _scan_repo_dir(repo_dir, job_dir=job_dir, raw_dir_name="raw")
 
-    out_dir = job_dir / "out"
-    ensure_dir(out_dir)
+        out_dir = job_dir / "out"
+        ensure_dir(out_dir)
 
-    pack_path = build_evidence_pack(
-        repo_dir=repo_dir,
-        out_dir=out_dir,
-        project_name=project_name,
-        job_id=job_id,
-        job_dir=job_dir,
-    )
+        pack_path = build_evidence_pack(
+            repo_dir=repo_dir,
+            out_dir=out_dir,
+            project_name=project_name,
+            job_id=job_id,
+            job_dir=job_dir,
+        )
     return FileResponse(
         path=str(pack_path), filename=pack_path.name, media_type="application/zip"
     )

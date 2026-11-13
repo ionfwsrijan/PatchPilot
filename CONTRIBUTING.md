@@ -195,6 +195,8 @@ cd frontend
 npm run test      # if configured
 ```
 
+The backend tests run against a temp database and work folder (set up in `backend/tests/conftest.py`), so running `pytest` never touches your real `PATCHPILOT_DB_PATH` or `PATCHPILOT_WORKDIR`.
+
 If there are no tests for the area you're touching, write some. PRs that add new endpoints or ML models without tests will be asked to add them before merging.
 
 ---

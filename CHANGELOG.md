@@ -14,6 +14,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Pat
 - **Database Schema Migration**: Added `severity_score REAL DEFAULT 5.0` to `findings` table in SQLite, non-destructively migrated in `init_db()` with `ORDER BY severity_score DESC NULLS LAST, created_at`.
 - **Frontend & Architecture Synchronization**: Added `severity_score` to frontend Finding types, mappers, and updated `ARCHITECTURE.md` with scoring hierarchy.
 
+- **Expired job cleanup (Issue #333)**: an hourly background pass removes jobs idle for longer than `JOB_TTL_HOURS` (default `24`, `0` disables, decimals accepted) together with their workspace folder and their `jobs`, `findings`, `verify_outcomes` and `fixes` rows. **On by default**, so existing deployments lose jobs older than 24 hours shortly after upgrading; see the README for the details and the single-process assumption.
+
+### Fixed
+
+- `delete_job()` (and so `DELETE /jobs/{job_id}`) now also deletes the job's rows from `fixes`, which used to be left behind, and it runs all its deletes in one transaction.
+
 ---
 
 ## [0.1.0] — 2026-05-27
