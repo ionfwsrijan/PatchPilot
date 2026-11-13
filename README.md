@@ -84,11 +84,22 @@ Open `http://localhost:5173` in your browser.
 
 ## Configuration
 
-Backend environment variables:
+Backend environment variables. `backend/.env.example` lists them with comments (the app reads real environment variables, so export them or pass the file with `docker run --env-file`).
 
 | Variable | Default | Description |
 |---|---|---|
-| `JOB_TTL_HOURS` | `24` | Jobs older than this many hours are removed by an hourly cleanup (first pass about a minute after startup): the job workspace on disk plus its `jobs`, `findings`, `verify_outcomes` and `fixes` rows. Org jobs go once all their repo jobs are gone. Scans that are still running are never removed. Jobs with no `created_at` are aged by their workspace folder's modified time, and removed if the folder is gone. Set to `0` to turn cleanup off. Must be a finite number, 0 or higher (decimals like `0.5` are fine); anything else (`nan`, `inf`, `1e999`, negative numbers, text) logs a warning and falls back to `24`. |
+| `JOB_TTL_HOURS` | `24` | How long a job may sit idle before the hourly cleanup removes it. `0` turns cleanup off, decimals like `0.5` are fine, and anything that isn't a finite number of 0 or more (`nan`, `inf`, `1e999`, negative numbers, text) logs a warning and falls back to `24`. See "Expired job cleanup" below. |
+
+### Expired job cleanup
+
+**Cleanup is on by default.** Upgrading an existing deployment means jobs that have been idle for more than 24 hours get removed shortly after the app starts (the first pass runs about a minute after startup, then every hour). Set `JOB_TTL_HOURS=0` before upgrading if you want to keep them, or a bigger value to keep them for longer.
+
+- **What is removed:** the job's workspace folder on disk and its rows in `jobs`, `findings`, `verify_outcomes` and `fixes`. Org jobs go once all their repo jobs are gone (with their dependency links). Findings, reports and evidence packs of a removed job are gone too.
+- **Which timestamp decides:** a job counts as expired when both its `created_at` and the last activity on its workspace folder are older than the TTL. The folder's modified time is the last activity: it is set when a scan creates the workspace and its output folders, and `/fix`, `/verify` and `/evidence-pack` refresh it when they start and when they finish. So a job you are still working with is not removed just because it was created a day ago. Jobs with no `created_at` are aged by the folder alone, and are removed if the folder is gone.
+- **In use right now:** scans that are still running, org batches that are still running, and jobs that a Fix, Verify or evidence pack request is working on are skipped. The evidence pack ZIP is refreshed when it is built, so the TTL counts from that point; a download that takes longer than the whole TTL to stream is not protected.
+- **Failures:** each job is removed workspace first, then all its rows in one database transaction. If the workspace can't be fully removed (permissions, a locked file) the error is logged and the job, rows included, stays and is retried on the next pass, so there is no state where the rows are gone but the files are still half there. If the database delete fails after the folder is gone, it is rolled back and the next pass finishes the job.
+- **Single process only:** "running" and "in use" are tracked in the API process's memory (`ACTIVE_SCANS` and a small in-use registry), so they are only reliable when the API runs as a single process, which is what the Dockerfile and the uvicorn command above do. With more than one worker (`uvicorn --workers N`, gunicorn) a worker can't see the scans and requests of the others, and the only protection left is the workspace's last-activity time, which does not cover a scan or request that outlives the TTL. In that setup keep a large TTL or set `JOB_TTL_HOURS=0`.
+- **Leftover folders:** a folder in the work directory with no `jobs` row is also removed once it is older than the TTL, but only if its name looks like a generated job id (8 characters of `a-z`, `0-9`, `_`) and it contains a `repo` folder, and it is not a symlink. Other folders in a shared `PATCHPILOT_WORKDIR` are never touched, but point `PATCHPILOT_WORKDIR` at a folder of its own if you can.
 
 ---
 
