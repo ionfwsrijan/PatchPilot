@@ -44,6 +44,14 @@ async def add_job(work_root, job_id, created_at, org_job_id=None):
             (f"x-{job_id}", job_id, f"f-{job_id}"),
         )
         await conn.commit()
+    if created_at is not None:
+        # A job that was last used when it was created: workspace mtime matches.
+        stamp = (
+            datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+        os.utime(work_root / job_id, (stamp, stamp))
 
 
 async def count(table, column, value):
@@ -152,8 +160,9 @@ async def test_orphaned_workspace_folders(env):
     old_orphan = env / "abc12_xy"
     recent_orphan = env / "zz99_new"
     unrelated = env / "my-notes"
-    for folder in (old_orphan, recent_orphan, unrelated):
-        folder.mkdir()
+    for folder in (old_orphan, recent_orphan):
+        (folder / "repo").mkdir(parents=True)
+    unrelated.mkdir()
     make_old(old_orphan)
     make_old(unrelated)
 
