@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,11 +9,27 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _safe_name(value: str, fallback: str = "project") -> str:
+    """Reduce user-supplied text to one safe path component.
+
+    Anything other than letters, digits, dot, dash and underscore becomes an
+    underscore, so separators, "..", drive letters and odd Unicode cannot
+    change where the pack is written or what the ZIP is called.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", str(value or "")).strip("._")
+    return cleaned[:80] or fallback
+
+
 def build_evidence_pack(
     repo_dir: Path, out_dir: Path, project_name: str, job_id: str, job_dir: Path = None
 ) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    pack_root = out_dir / f"patchpilot_evidence_{project_name}_{job_id}_{ts}"
+    pack_root = (
+        out_dir
+        / f"patchpilot_evidence_{_safe_name(project_name)}_{_safe_name(job_id, 'job')}_{ts}"
+    )
+    if pack_root.resolve().parent != out_dir.resolve():
+        raise ValueError("Evidence pack path escapes the output directory")
     pack_root.mkdir(parents=True, exist_ok=True)
 
     if job_dir is not None:
