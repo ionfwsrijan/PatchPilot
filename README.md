@@ -82,6 +82,12 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCAN_RATE_LIMIT` | `5/minute` | Per-IP limit on `POST /scan` and `POST /scan-url`. Uses slowapi syntax, for example `10/minute` or `100/hour`. Requests over the limit get HTTP 429 with a `Retry-After` header. |
+
 ## API reference
 
 | Method | Route | Description |

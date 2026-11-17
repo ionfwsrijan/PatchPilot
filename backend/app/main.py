@@ -33,6 +33,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi.errors import RateLimitExceeded
 
 from .db import (
     create_findings,
@@ -68,6 +69,7 @@ from .models import (
     ScanResponse,
     VerifyResponse,
 )
+from .ratelimit import get_scan_rate_limit, limiter, rate_limit_handler
 from .remediation.engine import propose_fixes
 from .reports.evidence_pack import build_evidence_pack
 from .reports.pdf_builder import generate_audit_pdf, generate_org_audit_pdf
@@ -107,6 +109,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PatchPilot API", version="0.1.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -709,9 +713,11 @@ async def _run_single_scan_task(
     responses={
         400: {"description": "Invalid ZIP archive or upload error."},
         413: {"description": "Uploaded file exceeds the maximum allowed size."},
+        429: {"description": "Rate limit exceeded."},
         500: {"description": "Internal server error."},
     },
 )
+@limiter.limit(get_scan_rate_limit)
 async def scan(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -796,11 +802,13 @@ async def scan(
     responses={
         400: {"description": "Invalid repository URL or repository download failed."},
         404: {"description": "Repository or branch not found."},
-        429: {"description": "GitHub API rate limit exceeded."},
+        429: {"description": "Rate limit exceeded."},
         500: {"description": "Internal server error."},
     },
 )
+@limiter.limit(get_scan_rate_limit)
 async def scan_url(
+    request: Request,
     background_tasks: BackgroundTasks,
     repo_url: str = Form(
         ...,
