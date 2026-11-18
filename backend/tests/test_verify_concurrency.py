@@ -65,7 +65,8 @@ async def test_verify_does_not_block_event_loop(tmp_path):
                 run_verify(), run_health()
             )
 
-    assert health_response.status_code == 200
+    # /health returns 503 when scanner binaries are missing; either way it answered.
+    assert health_response.status_code in (200, 503)
     assert verify_response.status_code == 200
     assert health_done_at["elapsed"] < HEALTH_MAX_SECONDS
     assert time.monotonic() - t0 >= BLOCK_SECONDS
