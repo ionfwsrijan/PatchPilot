@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -15,6 +16,28 @@ UUID_REGEX = re.compile(
 SVG_PATH_REGEX = re.compile(r"^[MmLlHhVvCcSsQqTtAaZz0-9\s,\.\-]+$")
 HEX_COLOR_REGEX = re.compile(r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$")
 STRING_LITERAL_REGEX = re.compile(r"(['\"])(.*?)\1")
+
+
+IGNORED_DIRS = {
+    ".git",
+    "node_modules",
+    "venv",
+    ".venv",
+    "env",
+    "__pycache__",
+    "build",
+    "dist",
+    ".next",
+}
+MAX_FILE_BYTES = 1024 * 1024
+
+
+def iter_candidate_files(repo_dir: Path):
+    """Walk repo_dir, pruning dependency and build directories."""
+    for root, dirs, files in os.walk(repo_dir):
+        dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+        for name in files:
+            yield Path(root) / name
 
 
 def calculate_shannon_entropy(text: str) -> float:
@@ -63,15 +86,13 @@ def run_entropy(repo_dir: Path) -> List[Finding]:
         ".ttf",
     }
 
-    for file_path in repo_dir.rglob("*"):
-        if (
-            not file_path.is_file()
-            or file_path.suffix.lower() in ignored_extensions
-            or ".git" in file_path.parts
-        ):
+    for file_path in iter_candidate_files(repo_dir):
+        if file_path.suffix.lower() in ignored_extensions:
             continue
 
         try:
+            if file_path.stat().st_size > MAX_FILE_BYTES:
+                continue
             content = file_path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
