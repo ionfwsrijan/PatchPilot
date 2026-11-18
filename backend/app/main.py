@@ -31,7 +31,7 @@ from fastapi import (
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .db import (
@@ -143,6 +143,7 @@ ensure_dir(WORK_ROOT)
 
 @app.get("/health")
 def health():
+    """Report scanner availability; return 503 when any scanner is missing."""
     scanners = {
         "semgrep": shutil.which("semgrep") is not None,
         "osv-scanner": shutil.which("osv-scanner") is not None,
@@ -151,11 +152,14 @@ def health():
 
     healthy = all(scanners.values())
 
-    return {
-        "ok": healthy,
-        "status": "healthy" if healthy else "degraded",
-        "scanners": scanners,
-    }
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "ok": healthy,
+            "status": "healthy" if healthy else "degraded",
+            "scanners": scanners,
+        },
+    )
 
 
 @app.get("/api/health/ollama", tags=["Health"])
