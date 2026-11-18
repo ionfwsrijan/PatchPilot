@@ -1365,6 +1365,12 @@ async def delete_job_endpoint(job_id: str):
     if not job_dir.exists():
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if ACTIVE_SCANS.get(job_id, {}).get("status") == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Job is still running. Wait for it to finish before deleting.",
+        )
+
     safe_rmtree(job_dir)
 
     db = await get_db()
@@ -1372,6 +1378,8 @@ async def delete_job_endpoint(job_id: str):
         await delete_job(db, job_id)
     finally:
         await db.close()
+
+    ACTIVE_SCANS.pop(job_id, None)
 
     return {"deleted": True}
 
