@@ -709,6 +709,7 @@ async def _run_single_scan_task(
     responses={
         400: {"description": "Invalid ZIP archive or upload error."},
         413: {"description": "Uploaded file exceeds the maximum allowed size."},
+        415: {"description": "Uploaded file is not a .zip archive."},
         500: {"description": "Internal server error."},
     },
 )
@@ -742,6 +743,12 @@ async def scan(
         raise HTTPException(
             status_code=413,
             detail=f"Header indicates file is too large. Maximum upload size is {MAX_UPLOAD_MB}MB.",
+        )
+
+    if not project.filename or not project.filename.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Only .zip archives are accepted.",
         )
 
     job_id = next(tempfile._get_candidate_names())
