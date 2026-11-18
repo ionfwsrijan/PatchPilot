@@ -1,0 +1,10 @@
+# Known noisy rule IDs, grouped by scanner. Add a rule ID under its scanner to
+# make the heuristic classifier treat matching findings as more likely false
+# positives. Matching is exact on rule_id, or by suffix (a rule id that ends
+# with ".<entry>").
+semgrep:
+  - python.lang.correctness.useless-comparison
+  - python.lang.best-practice.debug-print
+  - python.lang.performance.inefficient-loop
+  - javascript.console.log
+  - generic.unused-variable
