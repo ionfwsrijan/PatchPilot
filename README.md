@@ -59,7 +59,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pip install -r requirements-ml.txt # Required for ML features (ranking, deduplication)
+pip install -r requirements-ml.txt # Optional: torch/transformers for false-positive prediction (the app starts without them)
 uvicorn app.main:app --reload --port 8000
 ```
 

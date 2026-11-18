@@ -2,10 +2,21 @@ import logging
 import os
 
 import joblib
-import torch
-from transformers import AutoModel, AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+try:
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    HAS_ML = True
+except ImportError:
+    torch = AutoModel = AutoTokenizer = None
+    HAS_ML = False
+    logger.warning(
+        "torch/transformers not installed. False-positive prediction is disabled. "
+        "Install with: pip install -r requirements-ml.txt"
+    )
 
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
 CLASSIFIER_PATH = os.path.join(MODEL_DIR, "fp_classifier.pkl")
@@ -23,6 +34,10 @@ class FalsePositivePredictor:
 
     def _load_models(self):
         if self._models_loaded:
+            return
+
+        if not HAS_ML:
+            self._models_loaded = True
             return
 
         if not os.path.exists(CLASSIFIER_PATH):
